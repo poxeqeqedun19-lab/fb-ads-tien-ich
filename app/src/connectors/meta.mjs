@@ -231,6 +231,75 @@ export class MetaConnector {
   }
 
   /**
+   * Send a private message (Phase 3, mock only). Real mode throws
+   * NOT_VERIFIED (V-19/V-20) like every other real-mode method.
+   *
+   * VERIFIED facts used here (META_API_REVERIFICATION_2026-11-10.md
+   * §2.3) and nowhere else: the standard messaging window is usually
+   * 24 hours from most user actions, and up to 7 days from the first
+   * message after a Click-to-Messenger / Click-to-Direct ad. Window
+   * enforcement itself lives in src/agents/support.mjs
+   * (checkMessagingWindow / executeSendMessage) — this method sends
+   * whatever text it is given and performs NO window check, so it
+   * must only ever be called from that executor.
+   *
+   * NOT invented here: no Send API endpoint, no message tag, no
+   * limit or quota is ever named, built, or claimed. In particular
+   * the Human Agent tag is NOT used: the tag list is NOT_VERIFIED,
+   * and the verified page wording ("manually respond") supports a
+   * human-only reading, so no platform-executed send claims it.
+   * No channel parity is assumed (V-09 open): the surface is
+   * reported from the asset type only (facebook_page -> messenger,
+   * instagram_account -> instagram_dm).
+   * @param {object} opts
+   * @param {object} opts.asset - connected_assets row.
+   * @param {object} opts.conversation - conversations row.
+   * @param {string} opts.text - exact approved text to send.
+   */
+  sendMessage({ asset, conversation, text } = {}) {
+    if (this.mode === 'real') throw notVerifiedError();
+    if (!asset?.id || !conversation?.id) {
+      throw new Error('sendMessage: asset and conversation with ids are required');
+    }
+    if (typeof text !== 'string' || !text.trim()) {
+      throw Object.assign(new Error('sendMessage: non-empty text is required'), { code: 'validation_error' });
+    }
+    if (asset.status !== 'connected') {
+      throw Object.assign(
+        new Error(`Mock send failed: asset is ${asset.status} — mock reason, no real Meta call was made`),
+        { permanent: true },
+      );
+    }
+    if (asset.type !== 'facebook_page' && asset.type !== 'instagram_account') {
+      throw Object.assign(new Error('sendMessage: not a messaging surface'), { code: 'validation_error' });
+    }
+    return {
+      mock: true,
+      provider: 'mock',
+      surface: asset.type === 'facebook_page' ? 'messenger' : 'instagram_dm',
+      messageId: `mock-msg-${crypto.randomUUID()}`,
+      sentAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Read messages for a conversation (Phase 3 seam, mock only).
+   * Real mode throws NOT_VERIFIED. Mock mode returns an empty list:
+   * in mock mode the platform's own database IS the message store
+   * (messages are ingested into the messages table by the inbox
+   * module), so there is nothing to fetch from Meta — this method
+   * exists only so the real client can fill it later. It never
+   * invents message content, a Send API endpoint, or a read limit.
+   */
+  readMessages({ asset, conversation } = {}) {
+    if (this.mode === 'real') throw notVerifiedError();
+    if (!asset?.id || !conversation?.id) {
+      throw new Error('readMessages: asset and conversation with ids are required');
+    }
+    return { mock: true, provider: 'mock', messages: [] };
+  }
+
+  /**
    * Health check for one asset row (merged with its token row's status).
    * Mock: {status:'connected'} unless the token is expired/revoked, or the
    * asset itself is disconnected/revoked/error. Never contacts the network.

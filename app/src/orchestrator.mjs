@@ -14,6 +14,7 @@ import { createApproval } from './approvals.mjs';
 import { enqueue } from './jobs.mjs';
 import { reviewDraft } from './agents/policy.mjs';
 import { generateMockDraft } from './agents/content.mjs';
+import { handleInbound } from './agents/support.mjs';
 
 export const NO_WORKER_REASON = 'Phase 1 scaffolding — no worker agents connected yet';
 
@@ -322,3 +323,36 @@ async function aiDraftWorker(db, task, opts = {}) {
 
 registerWorker('content_flow', contentFlowWorker);
 registerWorker('ai_draft', aiDraftWorker);
+
+/**
+ * 'inbox_flow' — Agent 4 handling of one inbound message.
+ * contextRefs: { conversationId, messageId, authorId? }. Runs
+ * handleInbound: classify the message, then draft a reply (or
+ * escalate). Like 'ai_draft', this worker is internal-only: it never
+ * sends anything — a reply reaches a customer only through the
+ * send_message approval executor (src/agents/support.mjs).
+ * Returns { conversationId, messageId, classification, draft? |
+ * escalated, taskId? }.
+ */
+async function inboxFlowWorker(db, task, opts = {}) {
+  const contextRefs = task.contextRefs ?? {};
+  const { conversationId, messageId } = contextRefs;
+  if (!conversationId) throw Object.assign(new Error('inbox_flow task requires contextRefs.conversationId'), { code: 'validation_error' });
+  if (!messageId) throw Object.assign(new Error('inbox_flow task requires contextRefs.messageId'), { code: 'validation_error' });
+  const result = handleInbound(db, {
+    tenantId: task.tenant_id,
+    conversationId,
+    messageId,
+    authorId: contextRefs.authorId ?? opts?.actorId ?? null,
+  });
+  return {
+    conversationId,
+    messageId,
+    classification: result.classification,
+    draft: result.draft ?? null,
+    escalated: result.escalated ?? false,
+    taskId: result.taskId ?? null,
+  };
+}
+
+registerWorker('inbox_flow', inboxFlowWorker);

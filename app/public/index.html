@@ -136,6 +136,58 @@
     <h3>Policy verdict (selected draft)</h3>
     <div id="policy-panel">No draft selected.</div>
 
+    <h2>Unified Inbox (mock)</h2>
+    <p class="banner" role="note"><strong>Mock Meta provider — no real Meta account connected.</strong> Messenger and Instagram DM conversations below are mock/test data: messages arrive through the mock ingest endpoint and replies are mock sends that require approval. AI reply drafts are mock output, not produced by a real AI provider. Nothing here sends to a real account.</p>
+    <form id="inbox-search-form">
+      <label>Search conversations <input id="inbox-search-q" type="text" placeholder="customer name, channel, or message text"></label>
+      <button type="submit">Search</button>
+      <button id="inbox-search-clear-btn" type="button">Clear search</button>
+    </form>
+    <h3>Conversations</h3>
+    <button id="refresh-inbox-btn" type="button">Refresh inbox</button>
+    <table id="inbox-table">
+      <thead>
+        <tr><th>Channel</th><th>Customer</th><th>Last message</th><th>Time</th><th>Read / unread</th><th>Status</th><th>Assigned to</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="inbox-body"><tr><td colspan="8">Inbox not loaded yet.</td></tr></tbody>
+    </table>
+
+    <h3>Thread</h3>
+    <div id="inbox-thread">No conversation selected.</div>
+    <div id="inbox-window"></div>
+
+    <h3>Reply (mock AI draft + approval)</h3>
+    <p class="muted">AI drafting is mock only: the suggestion is labelled mock and nothing is sent until a different approver approves the exact text in the approval queue below.</p>
+    <form id="inbox-reply-form">
+      <label>Reply text <textarea id="inbox-reply-text" rows="4" cols="60"></textarea></label>
+      <input id="inbox-conversation-id" type="hidden">
+      <input id="inbox-suggestion-id" type="hidden">
+      <button id="inbox-ai-draft-btn" type="button">Get AI draft (mock)</button>
+      <button id="inbox-request-send-btn" type="button">Request approval to send</button>
+      <button id="inbox-discard-btn" type="button">Discard draft</button>
+    </form>
+    <p id="inbox-suggestion-info" class="muted"></p>
+
+    <h3>Conversation actions</h3>
+    <button id="inbox-mark-read-btn" type="button">Mark read</button>
+    <button id="inbox-mark-unread-btn" type="button">Mark unread</button>
+    <label>Status
+      <select id="inbox-status">
+        <option value="open">open</option>
+        <option value="pending">pending</option>
+        <option value="resolved">resolved</option>
+      </select>
+    </label>
+    <button id="inbox-set-status-btn" type="button">Set status</button>
+    <label>Assign to user ID <input id="inbox-assign-user" type="text" placeholder="user id"></label>
+    <button id="inbox-assign-btn" type="button">Assign</button>
+    <label>Escalation reason <input id="inbox-escalate-reason" type="text"></label>
+    <button id="inbox-escalate-btn" type="button">Escalate (create task)</button>
+    <label>Lead name <input id="inbox-lead-name" type="text"></label>
+    <label>Lead contact <input id="inbox-lead-contact" type="text" placeholder="only as provided by the customer"></label>
+    <button id="inbox-create-lead-btn" type="button">Save as lead (internal only)</button>
+    <p><a href="#approvals-table">Approval queue</a> — send approvals appear there; a different Owner/Admin must approve the exact text before anything is sent.</p>
+
     <h3>Approval queue (asset management)</h3>
     <button id="refresh-approvals-btn" type="button">Refresh approval queue</button>
     <table id="approvals-table">

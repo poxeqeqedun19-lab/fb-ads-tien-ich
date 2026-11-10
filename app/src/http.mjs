@@ -49,6 +49,37 @@ try {
   }
 }
 
+// Inbox routes (Module C, Phase 3) are registered by createApp when
+// the module is present, same pattern as the content routes above.
+let inboxModule = null;
+let registerInboxRoutes = null;
+try {
+  inboxModule = await import('./modules/inbox.mjs');
+  registerInboxRoutes = inboxModule.registerInboxRoutes;
+} catch (err) {
+  if (err?.code === 'ERR_MODULE_NOT_FOUND') {
+    console.warn('[meta-business-os] WARNING: src/modules/inbox.mjs is not present — Unified Inbox routes unavailable until the inbox worker delivers it.');
+  } else {
+    throw err;
+  }
+}
+
+// Agent 4 send executor (other stream's file src/agents/support.mjs):
+// executeSendMessage(db, payload, approval, actorId). Absent until that
+// stream delivers it — the send_message executor below then reports
+// no_executor instead of sending anything.
+let executeSendMessage = null;
+try {
+  ({ executeSendMessage } = await import('./agents/support.mjs'));
+  if (typeof executeSendMessage !== 'function') executeSendMessage = null;
+} catch (err) {
+  if (err?.code === 'ERR_MODULE_NOT_FOUND') {
+    console.warn('[meta-business-os] WARNING: src/agents/support.mjs is not present — send_message execution unavailable until the Agent 4 worker delivers it.');
+  } else {
+    throw err;
+  }
+}
+
 // Minimal static serving for app/public/ (Phase 1 skeleton UI): GET /
 // serves index.html. API paths and /health never fall through here.
 const PUBLIC_DIR = resolve(fileURLToPath(new URL('../public/', import.meta.url)));
@@ -125,6 +156,7 @@ const CODE_TO_STATUS = {
   approval_already_executed: 409,
   approval_version_mismatch: 409,
   approval_expired: 410,
+  no_executor: 400,
 };
 
 function toHttpError(err) {
@@ -172,6 +204,35 @@ export const defaultExecutors = {
       details: { metaObjectId: asset.meta_object_id, via: 'approved_execution' },
     });
     return { assetId: asset.id, status: 'disconnected' };
+  },
+  // send_message with payload { text, suggestionId } (Phase 3, Module C).
+  // The actual send is Agent 4's executeSendMessage (other stream); this
+  // wrapper only re-verifies the staleness gate before delegating: a
+  // suggestion edited after its approval was requested must not execute
+  // (AC-2-06 behaviour). Without the Agent 4 module, execution is
+  // refused with no_executor — nothing is ever sent by this wrapper.
+  send_message: async (db, payload, approval, actorId = null) => {
+    if (!payload || typeof payload.text !== 'string' || !payload.text.trim()) {
+      throw Object.assign(new Error('Unsupported send_message payload: text is required'), { code: 'validation_error' });
+    }
+    const conversation = db.prepare('SELECT * FROM conversations WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL').get(approval?.target_id, approval?.tenant_id);
+    if (!conversation) throw Object.assign(new Error('Conversation not found'), { code: 'not_found' });
+    if (payload.suggestionId && inboxModule && typeof inboxModule.suggestionStaleForApproval === 'function') {
+      const stale = inboxModule.suggestionStaleForApproval(db, approval);
+      if (stale?.stale) {
+        throw Object.assign(new Error(`Suggestion is stale: ${stale.reason} — re-approval required`), { code: 'approval_version_mismatch' });
+      }
+    }
+    if (typeof executeSendMessage !== 'function') {
+      throw Object.assign(new Error('No executor registered for action_type: send_message (Agent 4 support.mjs not present)'), { code: 'no_executor' });
+    }
+    // Contract adaptation (recorded integration decision): the stored
+    // approval payload is exactly {text, suggestionId} (task contract),
+    // but the delivered executeSendMessage requires
+    // payload.conversationId and verifies approval.target_id against
+    // it. Enrich the payload at delegation only — the stored payload
+    // and its version hash are untouched.
+    return executeSendMessage(db, { ...payload, conversationId: approval.target_id }, approval, actorId);
   },
 };
 
@@ -376,11 +437,16 @@ export function createApp({ db, config, services = {} }) {
   registerRoute('POST', '/api/approvals/:id/decide', { permission: 'approvals.decide' }, async (ctx) => {
     const { decision, note } = ctx.body ?? {};
     const approval = decideApproval(db, { approvalId: ctx.params.id, decidedBy: ctx.user, decision, note }, { expiryHours: config?.approvalExpiryHours });
-    // Optional module hook (Phase 2: Content Studio moves a post to
-    // approved/scheduled/refused when its publish approval is decided).
-    // A hook failure must never fail the decision itself.
+    // Module hooks, dispatched by action_type (Phase 2: Content Studio
+    // moves a post to approved/scheduled/refused when its publish
+    // approval is decided; Phase 3: the inbox hook verifies the send
+    // suggestion / marks it rejected). A hook failure must never fail
+    // the decision itself.
     try {
-      await services.onApprovalDecided?.(db, approval, { actorId: ctx.user.id, ip: ctx.ip });
+      const hook = approval.action_type === 'send_message'
+        ? (services.onSendApprovalDecided ?? services.onApprovalDecided)
+        : services.onApprovalDecided;
+      await hook?.(db, approval, { actorId: ctx.user.id, ip: ctx.ip });
     } catch (err) {
       console.error('[meta-business-os] onApprovalDecided hook failed:', err?.message);
     }
@@ -441,6 +507,11 @@ export function createApp({ db, config, services = {} }) {
   // Content routes (Module B, Phase 2).
   if (typeof registerContentRoutes === 'function') {
     registerContentRoutes({ registerRoute });
+  }
+
+  // Inbox routes (Module C, Phase 3).
+  if (typeof registerInboxRoutes === 'function') {
+    registerInboxRoutes({ registerRoute });
   }
 
   // ---- Handler -----------------------------------------------------------

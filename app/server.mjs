@@ -5,16 +5,20 @@
 // starts with core routes only (see src/http.mjs) and a warning is logged.
 // Phase 2: Content Studio's publish-approval hook is wired via services,
 // and a job worker interval runs due publish jobs every 30 s.
+// Phase 3: Unified Inbox's send-approval hook is wired via services;
+// the send_message executor lives in src/http.mjs defaultExecutors and
+// delegates to Agent 4's executeSendMessage when that stream delivers it.
 import http from 'node:http';
 import { loadConfig } from './src/config.mjs';
 import { createDb, closeDb } from './src/db.mjs';
 import { createApp } from './src/http.mjs';
 import { onPublishApprovalDecided, buildContentJobHandlers } from './src/modules/content.mjs';
+import { onSendApprovalDecided } from './src/modules/inbox.mjs';
 import { runDue } from './src/jobs.mjs';
 
 const config = loadConfig();
 const db = createDb(config.dbPath);
-const app = createApp({ db, config, services: { onApprovalDecided: onPublishApprovalDecided } });
+const app = createApp({ db, config, services: { onApprovalDecided: onPublishApprovalDecided, onSendApprovalDecided } });
 
 // Job worker: run due jobs every 30 s. runDue calls a handler as
 // handler(job), while the content job handler takes (db, job), so the

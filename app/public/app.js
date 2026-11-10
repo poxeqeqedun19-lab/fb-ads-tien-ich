@@ -328,6 +328,7 @@ async function signIn(email, password) {
   await loadAudit();
   await loadDrafts();
   await loadScheduled();
+  await loadInbox();
 }
 
 // ---------------------------------------------------------------------------
@@ -592,6 +593,226 @@ loadAssets = async function loadAssetsWithStudio() {
   if (ok) loadedAssets = data.assets || [];
 };
 
+// ---------------------------------------------------------------------------
+// Unified Inbox (Phase 3, Module C — mock ingestion / mock AI drafts)
+// ---------------------------------------------------------------------------
+
+let selectedConversationId = null;
+
+async function loadInbox() {
+  const { ok, data } = await api('/api/inbox');
+  const tbody = $('#inbox-body');
+  if (!ok) {
+    tbody.innerHTML = '<tr><td colspan="8">Could not load the inbox.</td></tr>';
+    showError(data, 'Could not load the inbox.');
+    return;
+  }
+  const conversations = data.conversations || [];
+  if (conversations.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8">No conversations yet. Use the mock ingest endpoint (tests/demo) to add one.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = '';
+  for (const c of conversations) {
+    const tr = document.createElement('tr');
+    for (const text of [
+      c.channel,
+      c.participant_name || c.participant_id,
+      c.last_message_text || '—',
+      c.last_message_at ? new Date(c.last_message_at).toLocaleString() : '—',
+      c.read_state,
+      c.status,
+      c.assigned_to || '—',
+    ]) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    }
+    const actions = document.createElement('td');
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.textContent = 'Open';
+    open.addEventListener('click', () => openConversation(c.id));
+    actions.appendChild(open);
+    tr.appendChild(actions);
+    tbody.appendChild(tr);
+  }
+}
+
+async function openConversation(conversationId) {
+  const { ok, status, data } = await api(`/api/inbox/${conversationId}`);
+  if (!ok) return showError(data, `Could not open the conversation (${status}).`);
+  selectedConversationId = conversationId;
+  $('#inbox-conversation-id').value = conversationId;
+  $('#inbox-status').value = data.conversation.status;
+  const panel = $('#inbox-thread');
+  panel.innerHTML = '';
+  const head = document.createElement('p');
+  head.textContent = `${data.conversation.channel} — ${data.conversation.participant_name || data.conversation.participant_id} (status: ${data.conversation.status}, ${data.conversation.read_state})`;
+  panel.appendChild(head);
+  for (const m of data.messages || []) {
+    const p = document.createElement('p');
+    const label = m.classification
+      ? ` [${m.classification.intent || '—'} / ${m.classification.urgency || '—'}${m.classification.source === 'user_correction' ? ' — user-corrected' : ' (mock AI)'}]`
+      : '';
+    p.textContent = `[${m.direction} · ${m.sender_type}${m.ai_generated ? ' · AI-generated (mock)' : ''}] ${m.body_text || ''}${label}`;
+    panel.appendChild(p);
+  }
+  if (data.lead) {
+    const lp = document.createElement('p');
+    lp.textContent = `Linked lead: ${data.lead.name || '—'} (${data.lead.status})`;
+    panel.appendChild(lp);
+  }
+  const w = data.messagingWindow || {};
+  $('#inbox-window').textContent = w.checked
+    ? (w.open ? `Messaging window: open${w.windowEndsAt ? ` (ends ${w.windowEndsAt})` : ''}.` : `Messaging window: closed — ${w.reason || 'reply cannot be sent'}.`)
+    : `Messaging window: ${w.reason || 'check unavailable'}.`;
+  showMessage(`Conversation ${conversationId} opened (${(data.messages || []).length} messages).`);
+}
+
+async function searchInbox() {
+  const q = $('#inbox-search-q').value.trim();
+  if (!q) return loadInbox();
+  const { ok, status, data } = await api(`/api/inbox/search?q=${encodeURIComponent(q)}`);
+  const tbody = $('#inbox-body');
+  if (!ok) {
+    tbody.innerHTML = '<tr><td colspan="8">Search failed.</td></tr>';
+    return showError(data, `Search failed (${status}).`);
+  }
+  const conversations = data.conversations || [];
+  tbody.innerHTML = '';
+  if (conversations.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8">No matching conversations.</td></tr>';
+    return;
+  }
+  for (const c of conversations) {
+    const tr = document.createElement('tr');
+    for (const text of [c.channel, c.participant_name || c.participant_id, c.last_message_text || '—', c.last_message_at ? new Date(c.last_message_at).toLocaleString() : '—', c.read_state, c.status, c.assigned_to || '—']) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    }
+    const actions = document.createElement('td');
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.textContent = 'Open';
+    open.addEventListener('click', () => openConversation(c.id));
+    actions.appendChild(open);
+    tr.appendChild(actions);
+    tbody.appendChild(tr);
+  }
+  showMessage(`${conversations.length} conversation(s) match “${q}”.`);
+}
+
+function requireSelectedConversation() {
+  const id = selectedConversationId || $('#inbox-conversation-id').value;
+  if (!id) {
+    showMessage('Open a conversation first.');
+    return null;
+  }
+  return id;
+}
+
+async function markInboxRead(read) {
+  const id = requireSelectedConversation();
+  if (!id) return;
+  const { ok, status, data } = await api(`/api/inbox/${id}/${read ? 'read' : 'unread'}`, { method: 'POST', body: {} });
+  if (!ok) return showError(data, `Mark ${read ? 'read' : 'unread'} failed (${status}).`);
+  showMessage(`Conversation ${id} marked ${data.conversation.read_state}.`);
+  await loadInbox();
+}
+
+async function setInboxStatus() {
+  const id = requireSelectedConversation();
+  if (!id) return;
+  const status = $('#inbox-status').value;
+  const { ok, status: httpStatus, data } = await api(`/api/inbox/${id}/status`, { method: 'POST', body: { status } });
+  if (!ok) return showError(data, `Set status failed (${httpStatus}).`);
+  showMessage(`Conversation ${id} status: ${data.conversation.status}.`);
+  await loadInbox();
+}
+
+async function assignInboxConversation() {
+  const id = requireSelectedConversation();
+  if (!id) return;
+  const userId = $('#inbox-assign-user').value.trim();
+  if (!userId) return showMessage('Enter a user ID to assign.');
+  const { ok, status, data } = await api(`/api/inbox/${id}/assign`, { method: 'POST', body: { userId } });
+  if (!ok) return showError(data, `Assign failed (${status}).`);
+  showMessage(`Conversation ${id} assigned to ${data.conversation.assigned_to}.`);
+  await loadInbox();
+}
+
+async function getInboxAiDraft() {
+  const id = requireSelectedConversation();
+  if (!id) return;
+  const { ok, status, data } = await api(`/api/inbox/${id}/draft-reply`, { method: 'POST', body: { facts: {} } });
+  if (!ok) return showError(data, `AI draft failed (${status}).`);
+  if (data.escalated) {
+    showMessage(`Mock AI escalated this conversation instead of drafting a reply (task ${data.taskId || '—'}). No reply was drafted.`);
+    return;
+  }
+  $('#inbox-reply-text').value = data.text || '';
+  $('#inbox-suggestion-id').value = data.suggestionId || '';
+  $('#inbox-suggestion-info').textContent = data.suggestionId
+    ? `Mock AI suggestion ${data.suggestionId} (provider: ${data.provider || 'mock'}). Edit it above, then request approval to send — or discard it.`
+    : 'Mock AI returned no suggestion.';
+  showMessage(data.note || 'Mock AI draft ready — edit it, then request approval to send.');
+}
+
+async function requestInboxSend() {
+  const id = requireSelectedConversation();
+  if (!id) return;
+  const text = $('#inbox-reply-text').value;
+  if (!text.trim()) return showMessage('Enter reply text first (or get an AI draft).');
+  const suggestionId = $('#inbox-suggestion-id').value || null;
+  const { ok, status, data } = await api(`/api/inbox/${id}/request-send`, { method: 'POST', body: { text, suggestionId } });
+  if (!ok) return showError(data, `Request send failed (${status}).`);
+  showMessage(`Send approval requested (${data.approvalId}). ${data.note || ''} See the approval queue below.`);
+  await loadApprovals();
+}
+
+function discardInboxDraft() {
+  $('#inbox-reply-text').value = '';
+  $('#inbox-suggestion-id').value = '';
+  $('#inbox-suggestion-info').textContent = 'Draft discarded — nothing was sent.';
+  showMessage('Reply draft discarded.');
+}
+
+async function escalateInboxConversation() {
+  const id = requireSelectedConversation();
+  if (!id) return;
+  const reason = $('#inbox-escalate-reason').value.trim();
+  if (!reason) return showMessage('Enter an escalation reason.');
+  const { ok, status, data } = await api(`/api/inbox/${id}/escalate`, { method: 'POST', body: { reason } });
+  if (!ok) return showError(data, `Escalate failed (${status}).`);
+  showMessage(`Escalation task created (${data.task.id}).`);
+}
+
+async function createInboxLead() {
+  const id = requireSelectedConversation();
+  if (!id) return;
+  const name = $('#inbox-lead-name').value.trim() || null;
+  const contact = $('#inbox-lead-contact').value.trim() || null;
+  const { ok, status, data } = await api(`/api/inbox/${id}/create-lead`, { method: 'POST', body: { name, contact } });
+  if (!ok) return showError(data, `Create lead failed (${status}).`);
+  showMessage(`Lead created (${data.lead?.id || '—'}). Internal record only — no message was sent.`);
+  await openConversation(id);
+}
+
+$('#inbox-search-form').addEventListener('submit', (ev) => { ev.preventDefault(); searchInbox(); });
+$('#inbox-search-clear-btn').addEventListener('click', () => { $('#inbox-search-q').value = ''; loadInbox(); });
+$('#refresh-inbox-btn').addEventListener('click', loadInbox);
+$('#inbox-mark-read-btn').addEventListener('click', () => markInboxRead(true));
+$('#inbox-mark-unread-btn').addEventListener('click', () => markInboxRead(false));
+$('#inbox-set-status-btn').addEventListener('click', setInboxStatus);
+$('#inbox-assign-btn').addEventListener('click', assignInboxConversation);
+$('#inbox-ai-draft-btn').addEventListener('click', getInboxAiDraft);
+$('#inbox-request-send-btn').addEventListener('click', requestInboxSend);
+$('#inbox-discard-btn').addEventListener('click', discardInboxDraft);
+$('#inbox-escalate-btn').addEventListener('click', escalateInboxConversation);
+$('#inbox-create-lead-btn').addEventListener('click', createInboxLead);
+
 $('#draft-form').addEventListener('submit', createDraft);
 $('#draft-save-btn').addEventListener('click', saveDraftEdits);
 $('#draft-edit-approved-btn').addEventListener('click', editApprovedDraft);
@@ -612,6 +833,7 @@ $('#refresh-scheduled-btn').addEventListener('click', loadScheduled);
     await loadAudit();
     await loadDrafts();
     await loadScheduled();
+    await loadInbox();
   } else {
     setSignedOut();
   }

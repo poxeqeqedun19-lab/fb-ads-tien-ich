@@ -1,7 +1,8 @@
 // RBAC — roles, permission map (least privilege), and access checks.
 // Roles: Owner / Admin / Editor / Viewer.
-// `drafts.create` and `inbox.reply` are Phase 2 / Phase 3 placeholder
-// permission keys only — no draft or inbox endpoints exist in Phase 1.
+// Phase 2 keys: drafts.* / ai.draft. Phase 3 keys (wired for real):
+// inbox.view / inbox.reply / inbox.assign / inbox.manage (Viewer: view
+// only; Editor: view/reply/assign/manage; Admin/Owner: all).
 export const ROLES = Object.freeze(['Owner', 'Admin', 'Editor', 'Viewer']);
 
 // '*' means all permissions (Owner only).
@@ -21,6 +22,10 @@ export const ROLE_PERMISSIONS = Object.freeze({
     'drafts.schedule',
     'drafts.publish',
     'ai.draft',
+    'inbox.view',
+    'inbox.reply',
+    'inbox.assign',
+    'inbox.manage',
   ]),
   Editor: Object.freeze([
     'assets.view', // assigned assets only (see canAccessAsset)
@@ -31,11 +36,15 @@ export const ROLE_PERMISSIONS = Object.freeze({
     'drafts.schedule',
     'drafts.publish',
     'ai.draft',
-    'inbox.reply', // Phase 3 placeholder key only
+    'inbox.view',
+    'inbox.reply',
+    'inbox.assign',
+    'inbox.manage',
   ]),
   Viewer: Object.freeze([
     'assets.view', // assigned assets only (see canAccessAsset)
     'drafts.view',
+    'inbox.view',
   ]),
 });
 

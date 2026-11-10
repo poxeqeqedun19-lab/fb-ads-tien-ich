@@ -220,7 +220,110 @@ CREATE TABLE IF NOT EXISTS post_policy_reviews (
   notes TEXT,
   created_at TEXT NOT NULL
 );
+-- Phase 3 — Unified Inbox (Module C). Status values are open/pending/
+-- resolved with assignment as a separate field (roadmap §7 / task),
+-- NOT the open/assigned/resolved/closed set in DATABASE_DESIGN §3.8 —
+-- see the delivery report for the recorded divergence.
+CREATE TABLE IF NOT EXISTS conversations (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  asset_id TEXT NOT NULL REFERENCES connected_assets(id),
+  channel TEXT NOT NULL CHECK (channel IN ('messenger','instagram_dm')),
+  meta_conversation_id TEXT,
+  participant_id TEXT NOT NULL,
+  participant_name TEXT,
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','pending','resolved')),
+  read_state TEXT NOT NULL DEFAULT 'unread' CHECK (read_state IN ('read','unread')),
+  assigned_to TEXT REFERENCES users(id),
+  last_message_at TEXT,
+  last_message_text TEXT,
+  window_started_at TEXT,
+  window_basis TEXT CHECK (window_basis IN ('user_action','ad_click')),
+  lead_id TEXT REFERENCES leads(id),
+  deleted_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  created_by TEXT,
+  updated_by TEXT
+);
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  conversation_id TEXT NOT NULL REFERENCES conversations(id),
+  meta_message_id TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('inbound','outbound')),
+  sender_type TEXT NOT NULL CHECK (sender_type IN ('customer','user','system','ai_assisted')),
+  sender_user_id TEXT REFERENCES users(id),
+  body_text TEXT,
+  media_ids TEXT NOT NULL DEFAULT '[]',
+  message_type TEXT NOT NULL DEFAULT 'text',
+  sent_at TEXT NOT NULL,
+  delivery_status TEXT NOT NULL CHECK (delivery_status IN ('received','sent','delivered','read','failed')),
+  ai_generated INTEGER NOT NULL DEFAULT 0,
+  ai_job_id TEXT,
+  approval_id TEXT,
+  deleted_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS message_classifications (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  message_id TEXT NOT NULL REFERENCES messages(id),
+  conversation_id TEXT NOT NULL REFERENCES conversations(id),
+  intent TEXT,
+  urgency TEXT,
+  confidence REAL,
+  source TEXT NOT NULL CHECK (source IN ('mock_ai','user_correction')),
+  corrected_from TEXT,
+  corrected_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS leads (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  source TEXT NOT NULL CHECK (source IN ('messenger','instagram_dm','whatsapp','comment','ad','manual','form')),
+  source_conversation_id TEXT REFERENCES conversations(id),
+  name TEXT,
+  contact TEXT,
+  status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','contacted','qualified','unqualified','converted','lost')),
+  owner_id TEXT REFERENCES users(id),
+  notes TEXT,
+  deleted_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  created_by TEXT,
+  updated_by TEXT
+);
+-- No Task entity is defined in the Phase 0 docs; this minimal platform
+-- table exists so Agent 4 escalations and Agent 9 follow-ups have a
+-- durable row (deliberate decision, see the delivery report).
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  type TEXT NOT NULL CHECK (type IN ('escalation','follow_up','lead_follow_up')),
+  title TEXT NOT NULL,
+  details TEXT,
+  conversation_id TEXT REFERENCES conversations(id),
+  lead_id TEXT REFERENCES leads(id),
+  assigned_to TEXT REFERENCES users(id),
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','done')),
+  created_by TEXT,
+  deleted_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_posts_tenant_asset_status_scheduled ON posts (tenant_id, asset_id, status, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_conversations_tenant_asset_status_last ON conversations (tenant_id, asset_id, status, last_message_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_tenant_asset_participant ON conversations (tenant_id, asset_id, participant_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_sent ON messages (conversation_id, sent_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_tenant_meta_message ON messages (tenant_id, meta_message_id);
+CREATE INDEX IF NOT EXISTS idx_classifications_message_created ON message_classifications (message_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_classifications_tenant_conversation ON message_classifications (tenant_id, conversation_id);
+CREATE INDEX IF NOT EXISTS idx_leads_tenant_status_created ON leads (tenant_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_tenant_status_created ON tasks (tenant_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_tenant_conversation ON tasks (tenant_id, conversation_id);
 CREATE INDEX IF NOT EXISTS idx_posts_tenant_meta_post ON posts (tenant_id, meta_post_id);
 CREATE INDEX IF NOT EXISTS idx_ai_jobs_tenant_requested ON ai_jobs (tenant_id, requested_by, created_at);
 CREATE INDEX IF NOT EXISTS idx_ai_suggestions_tenant_job ON ai_suggestions (tenant_id, ai_job_id);
