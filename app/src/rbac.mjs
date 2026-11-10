@@ -9,6 +9,15 @@
 // decide/execute time by the moderation executor (other stream), NOT
 // by these keys: an Editor may REQUEST hide/delete, only an
 // Admin/Owner may decide/execute it.
+// Phase 5 keys (Module I, AI Marketing Assistant):
+// assistant.view — Owner/Admin/Editor/Viewer: read-only views
+//   (suggestion history, task list, settings). Viewer holds ONLY
+//   this key: a Viewer may view history/settings but never ask, draft,
+//   or create.
+// assistant.use — Owner/Admin/Editor: ask the assistant, draft via
+//   Agents 1/3/4, create tasks, run analysis, review suggestions.
+// assistant.settings — Owner/Admin only: change brand voice, reply
+//   rules, and drafting-template phrasing.
 export const ROLES = Object.freeze(['Owner', 'Admin', 'Editor', 'Viewer']);
 
 // '*' means all permissions (Owner only).
@@ -36,6 +45,9 @@ export const ROLE_PERMISSIONS = Object.freeze({
     'comments.reply',
     'comments.assign',
     'comments.moderate',
+    'assistant.view',
+    'assistant.use',
+    'assistant.settings',
   ]),
   Editor: Object.freeze([
     'assets.view', // assigned assets only (see canAccessAsset)
@@ -54,12 +66,15 @@ export const ROLE_PERMISSIONS = Object.freeze({
     'comments.reply',
     'comments.assign',
     'comments.moderate',
+    'assistant.view',
+    'assistant.use',
   ]),
   Viewer: Object.freeze([
     'assets.view', // assigned assets only (see canAccessAsset)
     'drafts.view',
     'inbox.view',
     'comments.view',
+    'assistant.view', // read-only: history / task list / settings only
   ]),
 });
 

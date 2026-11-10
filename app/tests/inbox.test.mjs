@@ -452,7 +452,13 @@ test('request-send: approval created when Agent 4 window check passes, else 503 
     assert.equal(res.json.approval.target_id, conv.id);
     assert.deepEqual(res.json.approval.payload, { text: 'Hello, how can we help?', suggestionId: null });
     assert.equal(res.json.approval.status, 'pending');
-    assert.equal(res.json.policy.checked, false, 'policy review is not run for replies (post-specific reviewDraft — see report)');
+    // B-12 (Phase 5): Agent 7 reviewMessageReply now runs on every
+    // request-send — same R-01..R-05 rule set as posts/comments.
+    // 'Hello, how can we help?' triggers no rule, so the verdict is
+    // 'pass' and policy.checked is true. This replaces the Phase 3
+    // assertion (policy.checked === false) that encoded the open gap.
+    assert.equal(res.json.policy.checked, true, 'B-12: Agent 7 policy check runs on inbox replies');
+    assert.equal(res.json.policy.verdict, 'pass');
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND direction = \'outbound\'').get(conv.id).n, 0, 'nothing sent by requesting approval');
   } else {
     assert.equal(res.status, 503, res.text);
@@ -648,4 +654,53 @@ test('validation: bad channel, channel/asset mismatch, bad status, unknown/cross
   const missingConv = await api(base, 'GET', '/api/inbox/nonexistent-id', tokens.ownerA);
   assert.equal(missingConv.status, 404, missingConv.text);
   void db;
+});
+
+test('B-12 (Phase 5): request-send runs Agent 7 reviewMessageReply — invented figure is flagged, credential request is block, both advisory', async (t) => {
+  const { db, base, tenantA, tokens, pageId } = await boot(t);
+  const now = new Date().toISOString();
+  const conv = insertConversation(db, tenantA.id, pageId, 'messenger', 'psid-b12', 'B-12 Test', { window_started_at: now, window_basis: 'user_action' });
+  insertMessage(db, tenantA.id, conv.id, 'How much is it?');
+
+  // R-01: a price figure not in any known fact is flagged (advisory — the approval is still created).
+  const flagged = await api(base, 'POST', `/api/inbox/${conv.id}/request-send`, tokens.editorA, { text: 'It costs $49 — a great deal!' });
+  assert.equal(flagged.status, 201, flagged.text);
+  assert.equal(flagged.json.policy.checked, true);
+  assert.equal(flagged.json.policy.verdict, 'flag_for_human_review');
+  assert.ok((flagged.json.policy.findings ?? []).some((f) => f.ruleId === 'R-01'), 'R-01 must fire on an invented price');
+  assert.equal(flagged.json.approval.status, 'pending', 'a flagged verdict is advisory — the approval is still created, the approver decides');
+  assert.deepEqual(flagged.json.approval.payload, { text: 'It costs $49 — a great deal!', suggestionId: null }, 'the frozen send payload is unchanged by the policy check');
+  const auditRows = listAudit(db, tenantA.id, { action: 'message.policy_reviewed' });
+  assert.ok(auditRows.length >= 1, 'policy review must be in the audit trail');
+  assert.equal(auditRows[0].details.verdict, 'flag_for_human_review');
+
+  // R-04: a credential request is a block recommendation — still advisory, approval still created.
+  const blocked = await api(base, 'POST', `/api/inbox/${conv.id}/request-send`, tokens.editorA, { text: 'Please send us your Facebook password so we can help.' });
+  assert.equal(blocked.status, 201, blocked.text);
+  assert.equal(blocked.json.policy.checked, true);
+  assert.equal(blocked.json.policy.verdict, 'block');
+  assert.ok((blocked.json.policy.findings ?? []).some((f) => f.ruleId === 'R-04'), 'R-04 must fire on a credential request');
+  assert.equal(blocked.json.approval.status, 'pending', 'a block verdict is advisory only — the human approver decides');
+  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND direction = 'outbound'`).get(conv.id).n, 0, 'nothing sent by requesting approval, flagged or blocked');
+});
+
+test('B-12 (Phase 5): reviewMessageReply unit — same rule set as posts/comments, no new rules', async (t) => {
+  const { db, tenantA, pageId } = await boot(t);
+  const policy = await import('../src/agents/policy.mjs');
+  const conv = insertConversation(db, tenantA.id, pageId, 'messenger', 'psid-b12u', 'B-12 Unit');
+  const clean = policy.reviewMessageReply(db, { tenantId: tenantA.id, conversationId: conv.id, text: 'Hello, thanks for writing — we will get back to you soon.' });
+  assert.equal(clean.verdict, 'pass');
+  assert.deepEqual(clean.findings, []);
+  const promise = policy.reviewMessageReply(db, { tenantId: tenantA.id, conversationId: conv.id, text: 'We guarantee #1 on Google Ads and double your sales!' });
+  assert.equal(promise.verdict, 'flag_for_human_review');
+  assert.ok(promise.findings.some((f) => f.ruleId === 'R-02'));
+  assert.ok(promise.findings.some((f) => f.ruleId === 'R-03'), 'Google Ads reference fires R-03');
+  // A figure that appears verbatim in a known fact is allowed (R-01).
+  const known = policy.reviewMessageReply(db, { tenantId: tenantA.id, conversationId: conv.id, text: 'The price is $49 as listed.', knownFacts: ['price: $49'] });
+  assert.equal(known.verdict, 'pass');
+  assert.throws(
+    () => policy.reviewMessageReply(db, { tenantId: tenantA.id, conversationId: 'no-such-conversation', text: 'hi' }),
+    /Conversation not found/,
+  );
+  void t;
 });

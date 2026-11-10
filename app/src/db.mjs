@@ -17,7 +17,7 @@ export function newId() {
   return crypto.randomUUID();
 }
 
-const SCHEMA = `
+export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS tenants (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -190,7 +190,7 @@ CREATE TABLE IF NOT EXISTS ai_jobs (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
   requested_by TEXT NOT NULL REFERENCES users(id),
-  purpose TEXT NOT NULL CHECK (purpose IN ('caption','reply_draft','ad_copy','comment_reply','summary','other')),
+  purpose TEXT NOT NULL CHECK (purpose IN ('caption','reply_draft','ad_copy','comment_reply','summary','other','assistant','analysis')),
   context_refs TEXT,
   provider TEXT NOT NULL DEFAULT 'mock',
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','succeeded','failed')),
@@ -207,6 +207,13 @@ CREATE TABLE IF NOT EXISTS ai_suggestions (
   reviewed_by TEXT,
   reviewed_at TEXT,
   used_in_post_id TEXT,
+  -- Phase 5 — acceptance tracking: when a suggestion is approved as
+  -- an edited version (edited_approved) the approved text is kept in
+  -- edited_text; when it is edited or discarded the human's reason
+  -- is kept in correction_note. Nothing is sent or published by
+  -- recording a review (AC-5-05).
+  edited_text TEXT,
+  correction_note TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -299,10 +306,17 @@ CREATE TABLE IF NOT EXISTS leads (
 -- No Task entity is defined in the Phase 0 docs; this minimal platform
 -- table exists so Agent 4 escalations and Agent 9 follow-ups have a
 -- durable row (deliberate decision, see the delivery report).
+-- Phase 5 adds two task types ('content_brief', 'review') for the AI
+-- Marketing Assistant / Stream 2 agent layer, and two nullable
+-- columns: due_date (FR-I-04 / AC-5-01/AC-5-02 — a task carries a
+-- due date "where provided"; the column is named due_date because
+-- Stream 2's agent layer (src/agents/assistant.mjs, insertTaskRow)
+-- looks it up by exactly that name) and source_ref (the
+-- conversation / comment / question a content brief came from).
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
-  type TEXT NOT NULL CHECK (type IN ('escalation','follow_up','lead_follow_up')),
+  type TEXT NOT NULL CHECK (type IN ('escalation','follow_up','lead_follow_up','content_brief','review')),
   title TEXT NOT NULL,
   details TEXT,
   conversation_id TEXT REFERENCES conversations(id),
@@ -310,7 +324,25 @@ CREATE TABLE IF NOT EXISTS tasks (
   assigned_to TEXT REFERENCES users(id),
   status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','done')),
   created_by TEXT,
+  due_date TEXT,
+  source_ref TEXT,
   deleted_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+-- Phase 5 — AI Marketing Assistant (Module I) settings, per tenant.
+-- brand_voice: free-text voice notes (NULL = none on file; the
+-- assistant then uses a neutral tone and says so). reply_rules and
+-- draft_templates: JSON arrays of strings.
+-- DRAFTING PHRASING ONLY — these templates are guidance for AI
+-- drafting, NEVER one-click saved replies: saved replies / templates
+-- for the inbox (C-06) are OUT of the MVP and no saved-reply shortcut
+-- is built on this table.
+CREATE TABLE IF NOT EXISTS assistant_settings (
+  tenant_id TEXT PRIMARY KEY REFERENCES tenants(id),
+  brand_voice TEXT,
+  reply_rules TEXT NOT NULL DEFAULT '[]',
+  draft_templates TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -324,6 +356,8 @@ CREATE INDEX IF NOT EXISTS idx_classifications_tenant_conversation ON message_cl
 CREATE INDEX IF NOT EXISTS idx_leads_tenant_status_created ON leads (tenant_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant_status_created ON tasks (tenant_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant_conversation ON tasks (tenant_id, conversation_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_tenant_type_status ON tasks (tenant_id, type, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_suggestions_tenant_review ON ai_suggestions (tenant_id, review_status, created_at);
 -- Phase 4 — Comment Management (Module D). Status / moderation_action
 -- enums and classification / policy-review shapes follow
 -- docs/DATABASE_DESIGN.md §3.9 and the Phase 4 task spec. Latest
@@ -407,6 +441,51 @@ function seedRolePermissions(db) {
   }
 }
 
+// Extract one CREATE TABLE statement out of the SCHEMA text.
+function extractCreateTable(schema, table) {
+  const start = schema.indexOf(`CREATE TABLE IF NOT EXISTS ${table} (`);
+  if (start === -1) throw new Error(`SCHEMA is missing CREATE TABLE for ${table}`);
+  const end = schema.indexOf('\n);', start);
+  if (end === -1) throw new Error(`SCHEMA CREATE TABLE for ${table} has no closing ');'`);
+  return schema.slice(start, end + 3);
+}
+
+// Rebuild one table when its stored CREATE TABLE text predates a CHECK
+// extension (SQLite cannot ALTER a CHECK). Returns true when rebuilt.
+// Preserves rows (intersecting columns only) and restores indexes by
+// re-running SCHEMA after the legacy table is dropped. The rebuild runs
+// with foreign keys off (ai_jobs is referenced by ai_suggestions) and
+// inside a transaction; a failure rolls back and leaves the old table.
+function rebuildTableForCheck(db, table, requiredValue) {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
+  if (!row || row.sql.includes(`'${requiredValue}'`)) return false;
+  const createSql = extractCreateTable(SCHEMA, table);
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.exec(`ALTER TABLE ${table} RENAME TO ${table}_legacy`);
+      db.exec(createSql);
+      const legacyCols = db.prepare(`PRAGMA table_info(${table}_legacy)`).all().map((c) => c.name);
+      const newCols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+      const shared = legacyCols.filter((c) => newCols.includes(c));
+      if (shared.length > 0) {
+        const cols = shared.join(', ');
+        db.exec(`INSERT INTO ${table} (${cols}) SELECT ${cols} FROM ${table}_legacy`);
+      }
+      db.exec(`DROP TABLE ${table}_legacy`);
+      db.exec('COMMIT');
+    } catch (err) {
+      try { db.exec('ROLLBACK'); } catch { /* already rolled back */ }
+      throw err;
+    }
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+  db.exec(SCHEMA); // restore indexes dropped with the legacy table
+  return true;
+}
+
 /** Open (creating parent dirs as needed) and migrate the DB. Returns DatabaseSync. */
 export function createDb(dbPath) {
   const path = dbPath === ':memory:' ? ':memory:' : resolve(dbPath);
@@ -414,11 +493,46 @@ export function createDb(dbPath) {
   const db = new DatabaseSync(path);
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(SCHEMA);
+  // Phase 5 (coordinator fix, MVP hardening): a database file created
+  // before Phase 5 keeps the old tasks.type / ai_jobs.purpose CHECKs
+  // (SQLite cannot ALTER a CHECK), so the assistant could not create
+  // content_brief/review tasks or assistant/analysis jobs on it —
+  // verified against the pre-Phase-5 dev database, where both inserts
+  // fail with CHECK constraint failed. Rebuild the table when its
+  // stored CREATE TABLE text lacks the new enum value. Runs before
+  // the column migrations below so the rebuilt table then gains
+  // comment_id / due_date / source_ref through the same code path.
+  rebuildTableForCheck(db, 'tasks', 'content_brief');
+  rebuildTableForCheck(db, 'ai_jobs', 'assistant');
   // Phase 4: tasks gain a nullable comment_id link (escalation tasks for
   // comments). Idempotent: a DB created before Phase 4 keeps working.
   const taskColumns = db.prepare('PRAGMA table_info(tasks)').all().map((c) => c.name);
   if (!taskColumns.includes('comment_id')) {
     db.exec(`ALTER TABLE tasks ADD COLUMN comment_id TEXT REFERENCES comments(id)`);
+  }
+  // Phase 5: tasks gain nullable due_date / source_ref columns (see
+  // the tasks CREATE TABLE comment above). Idempotent, same pattern.
+  if (!taskColumns.includes('due_date')) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN due_date TEXT`);
+  }
+  if (!taskColumns.includes('source_ref')) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN source_ref TEXT`);
+  }
+  // Phase 5: ai_suggestions gains nullable edited_text / correction_note
+  // columns for acceptance tracking (AC-5-05). Idempotent.
+  // NOTE: the CHECK extensions in the CREATE TABLE text (tasks.type
+  // 'content_brief'/'review', ai_jobs.purpose 'assistant'/'analysis')
+  // apply to databases created from this schema; a database file
+  // created before Phase 5 is rebuilt by rebuildTableForCheck above
+  // (SQLite cannot ALTER a CHECK), so old files gain the new CHECKs
+  // with their rows preserved. Tests and demos use :memory:
+  // databases, so they always get the new schema directly.
+  const suggestionColumns = db.prepare('PRAGMA table_info(ai_suggestions)').all().map((c) => c.name);
+  if (!suggestionColumns.includes('edited_text')) {
+    db.exec(`ALTER TABLE ai_suggestions ADD COLUMN edited_text TEXT`);
+  }
+  if (!suggestionColumns.includes('correction_note')) {
+    db.exec(`ALTER TABLE ai_suggestions ADD COLUMN correction_note TEXT`);
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_tenant_comment ON tasks (tenant_id, comment_id)');
   seedRolePermissions(db);

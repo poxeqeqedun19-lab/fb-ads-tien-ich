@@ -16,6 +16,11 @@ import { reviewDraft } from './agents/policy.mjs';
 import { generateMockDraft } from './agents/content.mjs';
 import { handleInbound } from './agents/support.mjs';
 import { handleComment } from './agents/community.mjs';
+import {
+  runAssistantTask,
+  withRetryOnce,
+  createAssistantEscalationTask,
+} from './agents/assistant.mjs';
 
 export const NO_WORKER_REASON = 'Phase 1 scaffolding — no worker agents connected yet';
 
@@ -390,3 +395,106 @@ async function commentFlowWorker(db, task, opts = {}) {
 }
 
 registerWorker('comment_flow', commentFlowWorker);
+
+/**
+ * 'assistant_task' — Phase 5 AI Marketing Assistant (Module I).
+ * contextRefs: { text, userId?, assetId?, settings?, minCount?,
+ *   forceFail?, intentContext? { assetId, commentId, conversationId,
+ *   postId, from, to, sourceRef, ownerId, dueDate }, assetIds?,
+ *   userIds? }.
+ *
+ * Routes a plain-language task through runAssistantTask
+ * (src/agents/assistant.mjs) with tenant-scoped context assembled
+ * via assembleContext (assets/users named in contextRefs; foreign
+ * ids are silently excluded there, never leaked). The dedup key of
+ * the orchestrator task IS the assistant idempotency key, so a
+ * re-routed task returns the original assistant result instead of
+ * executing twice (the assistant's own assistant_runs dedupe is the
+ * second guard).
+ *
+ * The whole run is wrapped in withRetryOnce: if runAssistantTask
+ * itself throws (a run-level failure — per-intent failures are
+ * already handled inside it, with retry-once-then-escalate per
+ * intent), the worker retries once, then creates an escalation task
+ * and rethrows so executeTask records the orchestrator task as
+ * failed — never silently re-scheduled.
+ *
+ * Internal-only: this worker never publishes, sends, deletes,
+ * changes a budget, or manages an asset. Sensitive intents inside
+ * the text become pending approval requests (or refusals) inside
+ * runAssistantTask; execution still needs a recorded human approval
+ * through the existing approval executors.
+ */
+async function assistantTaskWorker(db, task, opts = {}) {
+  const contextRefs = task.contextRefs ?? {};
+  const { text } = contextRefs;
+  if (!text || typeof text !== 'string' || !text.trim()) {
+    throw Object.assign(new Error('assistant_task requires contextRefs.text'), { code: 'validation_error' });
+  }
+  const tenantId = task.tenant_id;
+  const userId = contextRefs.userId ?? opts?.actorId ?? null;
+  if (!userId) {
+    throw Object.assign(new Error('assistant_task requires contextRefs.userId or opts.actorId'), { code: 'validation_error' });
+  }
+
+  // Tenant-scoped context packet (Agent 10, §6.2): only the assets /
+  // users this task names, filtered by tenant_id.
+  const context = assembleContext(db, tenantId, {
+    assetIds: contextRefs.assetIds ?? (contextRefs.assetId ? [contextRefs.assetId] : []),
+    userIds: contextRefs.userIds ?? (contextRefs.userId ? [contextRefs.userId] : []),
+  });
+
+  const intentContext = contextRefs.intentContext ?? {};
+  const runOutcome = await withRetryOnce(
+    async () =>
+      runAssistantTask(db, {
+        tenantId,
+        userId,
+        text,
+        idempotencyKey: task.dedup_key,
+        settings: contextRefs.settings ?? null,
+        contextRefs: {
+          assetId: contextRefs.assetId ?? intentContext.assetId ?? null,
+          commentId: intentContext.commentId ?? null,
+          conversationId: intentContext.conversationId ?? null,
+          postId: intentContext.postId ?? null,
+          from: intentContext.from ?? null,
+          to: intentContext.to ?? null,
+          sourceRef: intentContext.sourceRef ?? null,
+          ownerId: intentContext.ownerId ?? null,
+          dueDate: intentContext.dueDate ?? null,
+        },
+        assetId: contextRefs.assetId ?? null,
+        minCount: contextRefs.minCount ?? 3,
+        forceFail: contextRefs.forceFail ?? null,
+      }),
+    {
+      onEscalate: async (err) =>
+        createAssistantEscalationTask(db, {
+          tenantId,
+          userId,
+          reason: `assistant_task worker failed after one retry: ${err?.message ?? err}`,
+          details: `Orchestrator task ${task.id}; text: "${String(text).slice(0, 500)}".`,
+        }),
+    },
+  );
+  if (!runOutcome.ok) {
+    throw runOutcome.error;
+  }
+  return {
+    taskId: task.id,
+    dedupKey: task.dedup_key,
+    deduped: Boolean(runOutcome.value.deduped),
+    jobId: runOutcome.value.jobId,
+    intents: runOutcome.value.intents,
+    results: runOutcome.value.results,
+    refused: runOutcome.value.refused,
+    notDone: runOutcome.value.notDone,
+    contextSources: {
+      assets: context.assets.map((a) => a.id),
+      users: context.users.map((u) => u.id),
+    },
+  };
+}
+
+registerWorker('assistant_task', assistantTaskWorker);

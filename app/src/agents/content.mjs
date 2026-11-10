@@ -208,7 +208,7 @@ export function generateMockDraft(db, { tenantId, authorId, assetId, brief, draf
     action: 'ai.draft_generated',
     targetType: 'post',
     targetId: postId,
-    details: { aiJobId, draftId: postId, provider: 'mock' },
+    details: { aiJobId, draftId: postId, suggestionId, provider: 'mock' },
   });
 
   const draft = parsePostRow(db.prepare('SELECT * FROM posts WHERE id = ?').get(postId));

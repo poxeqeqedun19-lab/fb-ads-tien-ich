@@ -271,6 +271,110 @@
     <button id="comment-source-removed-btn" type="button">Mark removed on source (mock)</button>
     <p><a href="#approvals-table">Approval queue</a> — reply / hide / delete approvals appear there; a different Admin/Owner must approve the exact text or action before anything posts, hides, or deletes.</p>
 
+    <h2>AI Assistant (mock)</h2>
+    <p class="banner" role="note"><strong>Mock Meta provider — no real Meta account connected.</strong> The assistant below is mock AI output, not produced by a real AI provider. It drafts and analyses only: it never publishes, sends, replies publicly, hides, deletes, or changes anything on its own. Anything that would reach a customer or a live feed needs a separate approval in the approval queue below. Analysis findings are descriptive summaries of stored data only, with the data and date range stated — no future performance is promised.</p>
+
+    <h3>Ask (plain language)</h3>
+    <form id="assistant-ask-form">
+      <label>Ask the assistant <textarea id="assistant-ask-text" rows="3" cols="60" placeholder="Draft three captions for next week's sale and create a task to review them"></textarea></label>
+      <button type="submit">Ask (mock)</button>
+    </form>
+    <div id="assistant-result">No answer yet.</div>
+
+    <h3>Drafting help (mock)</h3>
+    <p class="muted">Drafts use the shared brand voice, reply rules, and drafting-template phrasing from Settings below. Drafting templates are phrasing guidance only — they are <strong>not</strong> one-click saved replies.</p>
+    <form id="assistant-caption-form">
+      <label>Asset <select id="assistant-asset" required></select></label>
+      <label>Topic <input id="assistant-caption-topic" type="text" required></label>
+      <label>Offer <input id="assistant-caption-offer" type="text"></label>
+      <label>Tone
+        <select id="assistant-caption-tone">
+          <option value="">(use brand voice)</option>
+          <option value="friendly">friendly</option>
+          <option value="professional">professional</option>
+          <option value="playful">playful</option>
+        </select>
+      </label>
+      <label>Call to action <input id="assistant-caption-cta" type="text"></label>
+      <button type="submit">Draft caption (mock)</button>
+    </form>
+    <form id="assistant-message-form">
+      <label>Conversation ID <input id="assistant-message-conversation" type="text" placeholder="conversation id"></label>
+      <button type="submit">Draft message reply (mock)</button>
+    </form>
+    <form id="assistant-comment-form">
+      <label>Comment ID <input id="assistant-comment-id" type="text" placeholder="comment id"></label>
+      <button type="submit">Draft comment reply (mock)</button>
+    </form>
+    <div id="assistant-draft-result">No draft yet.</div>
+
+    <h3>Analyse (mock)</h3>
+    <form id="assistant-analyse-form">
+      <label>Scope
+        <select id="assistant-analyse-scope">
+          <option value="posts">posts</option>
+          <option value="conversations">conversations</option>
+          <option value="comments">comments</option>
+        </select>
+      </label>
+      <label>From <input id="assistant-analyse-from" type="date"></label>
+      <label>To <input id="assistant-analyse-to" type="date"></label>
+      <button type="submit">Analyse (mock)</button>
+    </form>
+    <div id="assistant-analyse-result">No analysis yet.</div>
+
+    <h3>Tasks</h3>
+    <form id="assistant-task-form">
+      <label>Title <input id="assistant-task-title" type="text" required></label>
+      <label>Type
+        <select id="assistant-task-type">
+          <option value="review">review</option>
+          <option value="content_brief">content_brief</option>
+          <option value="follow_up">follow_up</option>
+        </select>
+      </label>
+      <label>Assign to user ID <input id="assistant-task-assignee" type="text" placeholder="user id"></label>
+      <label>Due date <input id="assistant-task-due" type="date"></label>
+      <label>Details <input id="assistant-task-details" type="text"></label>
+      <button type="submit">Create task</button>
+    </form>
+    <button id="refresh-assistant-tasks-btn" type="button">Refresh tasks</button>
+    <table id="assistant-tasks-table">
+      <thead>
+        <tr><th>Title</th><th>Type</th><th>Status</th><th>Assigned to</th><th>Due</th><th>Created</th></tr>
+      </thead>
+      <tbody id="assistant-tasks-body"><tr><td colspan="6">Tasks not loaded yet.</td></tr></tbody>
+    </table>
+
+    <h3>Suggestion history (mock)</h3>
+    <label>Outcome
+      <select id="assistant-suggestions-filter">
+        <option value="">any</option>
+        <option value="pending_review">pending_review</option>
+        <option value="approved">approved</option>
+        <option value="edited_approved">edited_approved</option>
+        <option value="rejected">rejected</option>
+      </select>
+    </label>
+    <button id="refresh-assistant-suggestions-btn" type="button">Refresh suggestions</button>
+    <table id="assistant-suggestions-table">
+      <thead>
+        <tr><th>Text</th><th>Purpose</th><th>Outcome</th><th>Edited text / correction</th><th>Reviewed</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="assistant-suggestions-body"><tr><td colspan="6">Suggestions not loaded yet.</td></tr></tbody>
+    </table>
+    <p class="muted">Approving, editing, or discarding a suggestion records the decision only — nothing is sent or published by that action.</p>
+
+    <h3>Assistant settings</h3>
+    <p class="muted">Brand voice, reply rules, and drafting-template phrasing are shared by all drafting help above. Owner/Admin only. Templates here are drafting phrasing guidance, not saved replies for the inbox.</p>
+    <form id="assistant-settings-form">
+      <label>Brand voice <textarea id="assistant-settings-voice" rows="2" cols="60" placeholder="e.g. friendly, concise"></textarea></label>
+      <label>Reply rules (one per line) <textarea id="assistant-settings-rules" rows="3" cols="60"></textarea></label>
+      <label>Drafting templates (one per line, phrasing guidance only) <textarea id="assistant-settings-templates" rows="3" cols="60"></textarea></label>
+      <button type="submit">Save settings</button>
+    </form>
+    <div id="assistant-settings-info" class="muted"></div>
+
     <h3>Approval queue (asset management)</h3>
     <button id="refresh-approvals-btn" type="button">Refresh approval queue</button>
     <table id="approvals-table">

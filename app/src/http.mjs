@@ -80,6 +80,23 @@ try {
   }
 }
 
+// Assistant routes (Module I, Phase 5) are registered by createApp
+// when the module is present, same pattern as the comment routes
+// above. The assistant only PREPARES approval requests through the
+// existing POST /api/approvals route; publishing / sending / replying
+// / hiding execute through the existing executors, so no new
+// executor is added here.
+let registerAssistantRoutes = null;
+try {
+  ({ registerAssistantRoutes } = await import('./modules/assistant.mjs'));
+} catch (err) {
+  if (err?.code === 'ERR_MODULE_NOT_FOUND') {
+    console.warn('[meta-business-os] WARNING: src/modules/assistant.mjs is not present — AI Assistant routes unavailable until the assistant worker delivers it.');
+  } else {
+    throw err;
+  }
+}
+
 // Agent 4 send executor (other stream's file src/agents/support.mjs):
 // executeSendMessage(db, payload, approval, actorId). Absent until that
 // stream delivers it — the send_message executor below then reports
@@ -597,6 +614,11 @@ export function createApp({ db, config, services = {} }) {
   // Comment routes (Module D, Phase 4).
   if (typeof registerCommentRoutes === 'function') {
     registerCommentRoutes({ registerRoute });
+  }
+
+  // Assistant routes (Module I, Phase 5).
+  if (typeof registerAssistantRoutes === 'function') {
+    registerAssistantRoutes({ registerRoute });
   }
 
   // ---- Handler -----------------------------------------------------------

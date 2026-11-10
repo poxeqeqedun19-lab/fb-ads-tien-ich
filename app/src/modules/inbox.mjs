@@ -35,13 +35,13 @@
 //   client params. Ingestion and sending here are MOCK features: no real
 //   Meta account, no real AI provider is involved. No WhatsApp.
 //
-// Policy note (Agent 7 gap, recorded — see delivery report):
-// src/agents/policy.mjs exports only reviewDraft(db, {tenantId, postId,
-// knownFacts}), which reads the posts table. It is post-specific and
-// cannot be called for a conversation reply, so request-send does NOT
-// run it. The same rule set still applies advisory: the human approver
-// sees the exact reply text before approving it. A conversation-scoped
-// policy review is a Phase 3 gap, not a silent pass.
+// Policy note (Agent 7 gap, CLOSED in Phase 5 — see delivery
+// report): src/agents/policy.mjs now exports reviewMessageReply,
+// which applies the same R-01..R-05 rule set as reviewDraft /
+// reviewCommentReply to a conversation reply. request-send runs it
+// and attaches the verdict to the approval request (advisory — the
+// human approver decides). The send_message payload
+// {text, suggestionId} is unchanged.
 
 import { appendAudit } from '../audit.mjs';
 import { createApproval } from '../approvals.mjs';
@@ -150,6 +150,24 @@ async function loadCrm() {
     return cachedCrm;
   } catch {
     cachedCrmFailed = true;
+    return null;
+  }
+}
+
+// Agent 7 (Policy Compliance) for inbox replies — Phase 5, closes
+// the B-12 gap: request-send runs reviewMessageReply (the same
+// R-01..R-05 rule set as posts/comments) and attaches its verdict
+// to the approval request. Mirrors the comments module's loadPolicy.
+let cachedPolicy = null;
+let cachedPolicyFailed = false;
+async function loadPolicy() {
+  if (cachedPolicy) return cachedPolicy;
+  if (cachedPolicyFailed) return null;
+  try {
+    cachedPolicy = await import('../agents/policy.mjs');
+    return cachedPolicy;
+  } catch {
+    cachedPolicyFailed = true;
     return null;
   }
 }
@@ -761,6 +779,31 @@ async function requestSend(ctx) {
     return { status: 409, body: { error: { code: 'window_closed', message: window.reason ?? 'Messaging window is closed' }, windowEndsAt: window.windowEndsAt ?? null } };
   }
 
+  // Agent 7 inbox policy check (Phase 5 — closes the B-12 gap,
+  // advisory): the same R-01..R-05 rule set as posts/comments runs
+  // over the exact reply text; a 'block' verdict is shown to the
+  // requester but does not itself refuse the approval request — the
+  // human approver decides. Absent Agent 7, the check is reported
+  // as not run, never passed silently. The frozen send_message
+  // payload {text, suggestionId} is NOT changed; the verdict is
+  // recorded in the approval-request audit details and in the
+  // response, so the executor's exact-text check is unaffected.
+  let policy = { checked: false, reason: 'No conversation-scoped policy review exists yet: Agent 7 reviewMessageReply (src/agents/policy.mjs) is not present. The approver reviews the exact reply text.' };
+  const policyModule = await loadPolicy();
+  if (policyModule && typeof policyModule.reviewMessageReply === 'function') {
+    try {
+      const checked = await policyModule.reviewMessageReply(ctx.db, { tenantId, conversationId: row.id, text, knownFacts: [] });
+      policy = {
+        checked: true,
+        verdict: checked?.verdict ?? checked?.review?.verdict ?? null,
+        findings: checked?.findings ?? checked?.review?.findings ?? [],
+        review: checked?.review ?? null,
+      };
+    } catch (e) {
+      policy = { checked: false, reason: `Policy check failed: ${e?.message ?? 'reviewMessageReply failed'}` };
+    }
+  }
+
   // Agent 7 policy review is post-specific (reviewDraft reads the posts
   // table) and is NOT forced onto a conversation reply. The exact text
   // below is what the approver sees; the gap is recorded in the report.
@@ -780,7 +823,7 @@ async function requestSend(ctx) {
     action: 'inbox.send_requested',
     targetType: 'conversation',
     targetId: row.id,
-    details: { approvalId: approval.id, suggestionId: payload.suggestionId, suggestionLinked, windowEndsAt: window.windowEndsAt ?? null },
+    details: { approvalId: approval.id, suggestionId: payload.suggestionId, suggestionLinked, windowEndsAt: window.windowEndsAt ?? null, policyVerdict: policy.verdict ?? null },
     ipAddress: ctx.ip ?? null,
   });
   return {
@@ -790,10 +833,7 @@ async function requestSend(ctx) {
       approvalId: approval.id,
       window,
       suggestionLinked,
-      policy: {
-        checked: false,
-        reason: 'No conversation-scoped policy review exists: Agent 7 reviewDraft is post-specific (reads the posts table). The approver reviews the exact reply text; the same rule set applies advisory.',
-      },
+      policy,
       note: suggestionId && !suggestionLinked
         ? 'The reply text was edited after drafting, so it will be sent as your own reply, not as the AI suggestion. Nothing has been sent. A different approver must approve this exact text before it can be sent.'
         : 'Nothing has been sent. A different approver must approve this exact text before it can be sent.',

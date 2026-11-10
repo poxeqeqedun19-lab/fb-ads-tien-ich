@@ -1062,6 +1062,264 @@ $('#comment-assign-btn').addEventListener('click', assignComment);
 $('#comment-escalate-btn').addEventListener('click', escalateComment);
 $('#comment-source-removed-btn').addEventListener('click', markCommentSourceRemoved);
 
+// ---------------------------------------------------------------------------
+// AI Assistant (Module I, Phase 5 — mock only)
+// ---------------------------------------------------------------------------
+
+function assistantLinesToList(text) {
+  return String(text || '').split('\n').map((s) => s.trim()).filter(Boolean);
+}
+
+async function loadAssistantAssets() {
+  const { ok, data } = await api('/api/assets');
+  const sel = $('#assistant-asset');
+  if (!sel) return;
+  sel.innerHTML = '';
+  if (!ok) return;
+  for (const a of data.assets || []) {
+    const opt = document.createElement('option');
+    opt.value = a.id;
+    opt.textContent = `${a.name || a.id} (${a.type})`;
+    sel.appendChild(opt);
+  }
+}
+
+async function askAssistant(ev) {
+  ev.preventDefault();
+  const text = $('#assistant-ask-text').value.trim();
+  if (!text) return showMessage('Enter a task for the assistant.');
+  const { ok, status, data } = await api('/api/assistant/ask', { method: 'POST', body: { text } });
+  if (!ok) return showError(data, `Ask failed (${status}).`);
+  const el = $('#assistant-result');
+  const notDone = (data.notDone || []).map((n) => `Not done: ${n.reason || n.code}`).join('\n');
+  el.textContent =
+    `provider: ${data.provider}\n` +
+    `intents: ${JSON.stringify(data.intents || [])}\n` +
+    `results: ${JSON.stringify(data.results || [], null, 2)}\n` +
+    (data.refused && data.refused.length ? `refused: ${JSON.stringify(data.refused, null, 2)}\n` : '') +
+    (notDone ? `${notDone}\n` : '') +
+    (data.note ? `${data.note}\n` : '');
+  showMessage(`Assistant answered (provider: ${data.provider}).`);
+  await loadAssistantTasks();
+  await loadAssistantSuggestions();
+}
+
+async function draftAssistantCaption(ev) {
+  ev.preventDefault();
+  const assetId = $('#assistant-asset').value;
+  const topic = $('#assistant-caption-topic').value.trim();
+  if (!assetId || !topic) return showMessage('Choose an asset and enter a topic.');
+  const brief = { topic };
+  const offer = $('#assistant-caption-offer').value.trim();
+  if (offer) brief.offer = offer;
+  const tone = $('#assistant-caption-tone').value;
+  if (tone) brief.tone = tone;
+  const cta = $('#assistant-caption-cta').value.trim();
+  if (cta) brief.callToAction = cta;
+  const { ok, status, data } = await api('/api/assistant/draft-caption', { method: 'POST', body: { assetId, brief } });
+  if (!ok) return showError(data, `Draft caption failed (${status}).`);
+  $('#assistant-draft-result').textContent =
+    `provider: ${data.provider} — ${data.brandVoiceNote || ''}\n` +
+    `Draft: ${(data.draft && data.draft.body_text) || data.suggestion?.output_text || '—'}\n` +
+    `Suggestion ${data.suggestionId || ''} (${data.suggestion?.review_status || 'pending_review'}). Nothing published.`;
+  showMessage(`Caption drafted (provider: ${data.provider}). Nothing published.`);
+  await loadAssistantSuggestions();
+}
+
+async function draftAssistantMessageReply(ev) {
+  ev.preventDefault();
+  const conversationId = $('#assistant-message-conversation').value.trim();
+  if (!conversationId) return showMessage('Enter a conversation ID.');
+  const { ok, status, data } = await api('/api/assistant/draft-message-reply', { method: 'POST', body: { conversationId } });
+  if (!ok) return showError(data, `Draft message reply failed (${status}).`);
+  if (data.escalated) {
+    $('#assistant-draft-result').textContent = `Escalated — no draft (reason: ${data.escalationReason || '?'}). Task ${data.taskId || ''}.`;
+    return showMessage('Message escalated to a human; no draft was produced.');
+  }
+  $('#assistant-draft-result').textContent =
+    `provider: ${data.provider}\nDraft reply: ${data.text || '—'}\nSuggestion ${data.suggestionId || ''}. Nothing sent.`;
+  showMessage(`Message reply drafted (provider: ${data.provider}). Nothing sent.`);
+  await loadAssistantSuggestions();
+}
+
+async function draftAssistantCommentReply(ev) {
+  ev.preventDefault();
+  const commentId = $('#assistant-comment-id').value.trim();
+  if (!commentId) return showMessage('Enter a comment ID.');
+  const { ok, status, data } = await api('/api/assistant/draft-comment-reply', { method: 'POST', body: { commentId } });
+  if (!ok) return showError(data, `Draft comment reply failed (${status}).`);
+  if (data.escalated) {
+    $('#assistant-draft-result').textContent = `Escalated — no draft (reason: ${data.escalationReason || '?'}). Task ${data.taskId || ''}.`;
+    return showMessage('Comment escalated to a human; no draft was produced.');
+  }
+  $('#assistant-draft-result').textContent =
+    `provider: ${data.provider}\nDraft reply: ${data.text || '—'}\nSuggestion ${data.suggestionId || ''}. Nothing posted.`;
+  showMessage(`Comment reply drafted (provider: ${data.provider}). Nothing posted.`);
+  await loadAssistantSuggestions();
+}
+
+async function analyseAssistant(ev) {
+  ev.preventDefault();
+  const scope = $('#assistant-analyse-scope').value;
+  const from = $('#assistant-analyse-from').value || undefined;
+  const to = $('#assistant-analyse-to').value || undefined;
+  const { ok, status, data } = await api('/api/assistant/analyse', { method: 'POST', body: { scope, from, to } });
+  if (!ok) return showError(data, `Analyse failed (${status}).`);
+  const notDone = (data.notDone || []).map((n) => `Not done: ${n.reason || n.code}`).join('\n');
+  $('#assistant-analyse-result').textContent =
+    `provider: ${data.provider} — scope: ${data.scope}, from: ${data.from || '—'}, to: ${data.to || '—'}\n` +
+    `findings: ${JSON.stringify(data.findings ?? null, null, 2)}\n` +
+    (notDone ? `${notDone}\n` : '') +
+    'Descriptive summary of stored data only. No future performance is promised.';
+  showMessage(`Analysis done (provider: ${data.provider}).`);
+}
+
+async function loadAssistantTasks() {
+  const { ok, data } = await api('/api/assistant/tasks');
+  const tbody = $('#assistant-tasks-body');
+  if (!tbody) return;
+  if (!ok) {
+    tbody.innerHTML = '<tr><td colspan="6">Could not load tasks.</td></tr>';
+    return;
+  }
+  const tasks = data.tasks || [];
+  tbody.innerHTML = '';
+  if (tasks.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6">No tasks yet.</td></tr>';
+    return;
+  }
+  for (const t of tasks) {
+    const tr = document.createElement('tr');
+    const cells = [t.title, t.type, t.status, t.assigned_to || '—', t.due_date ? t.due_date.slice(0, 10) : '—', (t.created_at || '').slice(0, 10)];
+    for (const c of cells) {
+      const td = document.createElement('td');
+      td.textContent = c;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+}
+
+async function createAssistantTask(ev) {
+  ev.preventDefault();
+  const title = $('#assistant-task-title').value.trim();
+  if (!title) return showMessage('Enter a task title.');
+  const body = { title, type: $('#assistant-task-type').value };
+  const assignee = $('#assistant-task-assignee').value.trim();
+  if (assignee) body.assignedTo = assignee;
+  const due = $('#assistant-task-due').value;
+  if (due) body.dueAt = due;
+  const details = $('#assistant-task-details').value.trim();
+  if (details) body.details = details;
+  const { ok, status, data } = await api('/api/assistant/tasks', { method: 'POST', body });
+  if (!ok) return showError(data, `Create task failed (${status}).`);
+  showMessage(`Task created (${data.task.id}).`);
+  await loadAssistantTasks();
+}
+
+async function loadAssistantSuggestions() {
+  const filter = $('#assistant-suggestions-filter').value;
+  const q = filter ? `?reviewStatus=${encodeURIComponent(filter)}` : '';
+  const { ok, data } = await api(`/api/assistant/suggestions${q}`);
+  const tbody = $('#assistant-suggestions-body');
+  if (!tbody) return;
+  if (!ok) {
+    tbody.innerHTML = '<tr><td colspan="6">Could not load suggestions.</td></tr>';
+    return;
+  }
+  const suggestions = data.suggestions || [];
+  tbody.innerHTML = '';
+  if (suggestions.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6">No suggestions yet.</td></tr>';
+    return;
+  }
+  for (const s of suggestions) {
+    const tr = document.createElement('tr');
+    const textTd = document.createElement('td');
+    textTd.textContent = (s.output_text || '').slice(0, 200);
+    tr.appendChild(textTd);
+    for (const c of [s.purpose || '—', s.review_status, (s.edited_text || s.correction_note || '—').slice(0, 80), (s.reviewed_at || '—').slice(0, 10)]) {
+      const td = document.createElement('td');
+      td.textContent = c;
+      tr.appendChild(td);
+    }
+    const actionsTd = document.createElement('td');
+    if (s.review_status === 'pending_review') {
+      const approveBtn = document.createElement('button');
+      approveBtn.type = 'button';
+      approveBtn.textContent = 'Approve as-is';
+      approveBtn.addEventListener('click', () => reviewAssistantSuggestion(s.id, 'approved'));
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.textContent = 'Approve edited…';
+      editBtn.addEventListener('click', () => {
+        const edited = window.prompt('Edited text to approve:', s.output_text);
+        if (edited === null || !edited.trim()) return;
+        reviewAssistantSuggestion(s.id, 'edited_approved', edited.trim());
+      });
+      const discardBtn = document.createElement('button');
+      discardBtn.type = 'button';
+      discardBtn.textContent = 'Discard';
+      discardBtn.addEventListener('click', () => {
+        const note = window.prompt('Correction note (optional):', '');
+        reviewAssistantSuggestion(s.id, 'rejected', undefined, note || undefined);
+      });
+      actionsTd.append(approveBtn, editBtn, discardBtn);
+    } else {
+      actionsTd.textContent = '—';
+    }
+    tr.appendChild(actionsTd);
+    tbody.appendChild(tr);
+  }
+}
+
+async function reviewAssistantSuggestion(id, decision, editedText, correctionNote) {
+  const body = { decision };
+  if (editedText !== undefined) body.editedText = editedText;
+  if (correctionNote !== undefined) body.correctionNote = correctionNote;
+  const { ok, status, data } = await api(`/api/assistant/suggestions/${id}/review`, { method: 'POST', body });
+  if (!ok) return showError(data, `Review failed (${status}).`);
+  showMessage(`Suggestion ${id}: ${data.suggestion.review_status}. Nothing was sent or published.`);
+  await loadAssistantSuggestions();
+}
+
+async function loadAssistantSettings() {
+  const { ok, data } = await api('/api/assistant/settings');
+  if (!ok) return;
+  const settings = data.settings || {};
+  $('#assistant-settings-voice').value = settings.brandVoice || '';
+  $('#assistant-settings-rules').value = (settings.replyRules || []).join('\n');
+  $('#assistant-settings-templates').value = (settings.draftTemplates || []).join('\n');
+  $('#assistant-settings-info').textContent = settings.brandVoice
+    ? 'Brand voice on file.'
+    : 'No brand voice on file — the assistant uses a neutral tone and says so.';
+}
+
+async function saveAssistantSettings(ev) {
+  ev.preventDefault();
+  const brandVoice = $('#assistant-settings-voice').value.trim();
+  const body = {
+    brandVoice: brandVoice || null,
+    replyRules: assistantLinesToList($('#assistant-settings-rules').value),
+    draftTemplates: assistantLinesToList($('#assistant-settings-templates').value),
+  };
+  const { ok, status, data } = await api('/api/assistant/settings', { method: 'PUT', body });
+  if (!ok) return showError(data, `Save settings failed (${status}).`);
+  showMessage('Assistant settings saved.');
+  await loadAssistantSettings();
+}
+
+$('#assistant-ask-form').addEventListener('submit', askAssistant);
+$('#assistant-caption-form').addEventListener('submit', draftAssistantCaption);
+$('#assistant-message-form').addEventListener('submit', draftAssistantMessageReply);
+$('#assistant-comment-form').addEventListener('submit', draftAssistantCommentReply);
+$('#assistant-analyse-form').addEventListener('submit', analyseAssistant);
+$('#assistant-task-form').addEventListener('submit', createAssistantTask);
+$('#refresh-assistant-tasks-btn').addEventListener('click', loadAssistantTasks);
+$('#refresh-assistant-suggestions-btn').addEventListener('click', loadAssistantSuggestions);
+$('#assistant-suggestions-filter').addEventListener('change', loadAssistantSuggestions);
+$('#assistant-settings-form').addEventListener('submit', saveAssistantSettings);
+
 // Restore a previous session, if the server still accepts the token.
 (async () => {
   if (!token) return;
@@ -1077,6 +1335,10 @@ $('#comment-source-removed-btn').addEventListener('click', markCommentSourceRemo
     await loadScheduled();
     await loadInbox();
     await loadComments();
+    await loadAssistantAssets();
+    await loadAssistantSettings();
+    await loadAssistantTasks();
+    await loadAssistantSuggestions();
   } else {
     setSignedOut();
   }

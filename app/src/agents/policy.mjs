@@ -220,6 +220,59 @@ export function reviewDraft(db, { tenantId, postId, knownFacts = [] }) {
 }
 
 /**
+ * Review an inbox reply against the SAME deterministic rule set
+ * (Phase 5 extension of Agent 7 to inbox replies — closes the B-12
+ * gap for the request-send flow; Phase 4 extended Agent 7 to
+ * comment replies only via reviewCommentReply).
+ *
+ * The verdict is ADVISORY only: it never approves, refuses, deletes,
+ * or blocks a reply by itself. A 'block' verdict is a recommendation
+ * that goes to the human approver, who decides. The only things this
+ * function writes are the audit entry (action
+ * 'message.policy_reviewed', with verdict + rule ids) — there is no
+ * message_policy_reviews table in the schema (db.mjs is owned by
+ * another stream), so the review is recorded in the append-only
+ * audit trail and attached to the approval request by the caller
+ * (src/modules/inbox.mjs puts the verdict in the approval-request
+ * audit details and in the request-send response; the frozen
+ * send_message payload {text, suggestionId} is NOT changed, so the
+ * executor's exact-text check is unaffected).
+ *
+ * @param {object} db - DatabaseSync handle.
+ * @param {object} opts
+ * @param {string} opts.tenantId
+ * @param {string} opts.conversationId
+ * @param {string} [opts.messageId] - the inbound message being answered, if any.
+ * @param {string} opts.text - the reply text under review.
+ * @param {string[]} [opts.knownFacts=[]] - user-provided fact strings.
+ *   A figure that appears verbatim in a known fact is allowed;
+ *   otherwise R-01 flags it.
+ * @returns {{ review, verdict, findings }}
+ */
+export function reviewMessageReply(db, { tenantId, conversationId, messageId = null, text, knownFacts = [] }) {
+  if (typeof text !== 'string' || !text) {
+    throw Object.assign(new Error('reviewMessageReply requires non-empty text'), { code: 'validation_error' });
+  }
+  const conversation = db.prepare('SELECT * FROM conversations WHERE id = ? AND tenant_id = ?').get(conversationId, tenantId);
+  if (!conversation) throw Object.assign(new Error('Conversation not found'), { code: 'not_found' });
+
+  const { verdict, findings } = reviewText(db, { tenantId, text, knownFacts });
+  const notes = notesForFindings(findings);
+
+  appendAudit(db, {
+    tenantId,
+    actorId: null,
+    actorType: 'system',
+    action: 'message.policy_reviewed',
+    targetType: 'conversation',
+    targetId: conversationId,
+    details: { conversationId, messageId, verdict, ruleIds: findings.map((f) => f.ruleId), notes },
+  });
+
+  return { review: { checker: POLICY_CHECKER, verdict, findings, notes }, verdict, findings };
+}
+
+/**
  * Review a comment reply against the SAME deterministic rule set
  * (Phase 4 extension of Agent 7 to comment replies; B-12 stays OPEN
  * for inbox replies — reviewDraft is still the only post path and
