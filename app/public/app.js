@@ -329,6 +329,7 @@ async function signIn(email, password) {
   await loadDrafts();
   await loadScheduled();
   await loadInbox();
+  await loadComments();
 }
 
 // ---------------------------------------------------------------------------
@@ -820,6 +821,247 @@ $('#ai-draft-form').addEventListener('submit', aiDraft);
 $('#refresh-drafts-btn').addEventListener('click', loadDrafts);
 $('#refresh-scheduled-btn').addEventListener('click', loadScheduled);
 
+$('#draft-form').addEventListener('submit', createDraft);
+$('#draft-save-btn').addEventListener('click', saveDraftEdits);
+$('#draft-edit-approved-btn').addEventListener('click', editApprovedDraft);
+$('#ai-draft-form').addEventListener('submit', aiDraft);
+$('#refresh-drafts-btn').addEventListener('click', loadDrafts);
+$('#refresh-scheduled-btn').addEventListener('click', loadScheduled);
+
+// ---------------------------------------------------------------------------
+// Comment Management (Phase 4, Module D — mock ingestion / mock AI)
+// ---------------------------------------------------------------------------
+
+let selectedCommentId = null;
+
+function commentFilterQuery() {
+  const params = new URLSearchParams();
+  const classification = $('#comments-filter-classification').value;
+  const postId = $('#comments-filter-post').value.trim();
+  const status = $('#comments-filter-status').value;
+  const from = $('#comments-filter-from').value;
+  const to = $('#comments-filter-to').value;
+  if (classification) params.set('classification', classification);
+  if (postId) params.set('postId', postId);
+  if (status) params.set('status', status);
+  if (from) params.set('from', `${from}T00:00:00.000Z`);
+  if (to) params.set('to', `${to}T23:59:59.999Z`);
+  const q = params.toString();
+  return q ? `?${q}` : '';
+}
+
+async function loadComments() {
+  const { ok, data } = await api(`/api/comments${commentFilterQuery()}`);
+  const tbody = $('#comments-body');
+  if (!ok) {
+    tbody.innerHTML = '<tr><td colspan="7">Could not load comments.</td></tr>';
+    showError(data, 'Could not load comments.');
+    return;
+  }
+  const comments = data.comments || [];
+  if (comments.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7">No comments yet. Use the mock ingest endpoint (tests/demo) to add one.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = '';
+  for (const c of comments) {
+    const tr = document.createElement('tr');
+    for (const text of [
+      c.post ? (c.post.title || c.post.id) : (c.meta_post_id || '—'),
+      c.author_name || c.author_meta_id || '—',
+      c.body_text || '—',
+      c.created_at ? new Date(c.created_at).toLocaleString() : '—',
+      c.status + (c.removed_on_source ? ' (removed on source)' : ''),
+      c.classification
+        ? `${c.classification.classification} (${c.classification.confidence ?? '—'}${c.classification.needs_human_review ? ' · needs human review' : ''}${c.classification.source === 'user_correction' ? ' · user-corrected' : ' · mock AI'})`
+        : '— (mock AI pending)',
+    ]) {
+      const td = document.createElement('td');
+      td.textContent = text;
+      tr.appendChild(td);
+    }
+    const actions = document.createElement('td');
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.textContent = 'Open';
+    open.addEventListener('click', () => openComment(c.id));
+    actions.appendChild(open);
+    tr.appendChild(actions);
+    tbody.appendChild(tr);
+  }
+}
+
+async function openComment(commentId) {
+  const { ok, status, data } = await api(`/api/comments/${commentId}`);
+  if (!ok) return showError(data, `Could not open the comment (${status}).`);
+  selectedCommentId = commentId;
+  $('#comment-id').value = commentId;
+  $('#comment-status').value = data.comment.status;
+  const panel = $('#comment-detail');
+  panel.innerHTML = '';
+  const c = data.comment;
+  const head = document.createElement('p');
+  head.textContent = `${c.author_name || c.author_meta_id || '—'} on ${c.post ? (c.post.title || c.post.id) : (c.meta_post_id || '—')} (status: ${c.status}${c.removed_on_source ? ', removed on source — reply/moderation refused' : ''})`;
+  panel.appendChild(head);
+  const body = document.createElement('p');
+  body.textContent = c.body_text || '';
+  panel.appendChild(body);
+  const cls = document.createElement('p');
+  cls.textContent = data.classification
+    ? `Classification (mock AI${data.classification.source === 'user_correction' ? ', user-corrected' : ''}): ${data.classification.classification} — sentiment ${data.classification.sentiment || '—'}, urgency ${data.classification.urgency || '—'}, confidence ${data.classification.confidence ?? '—'}${data.classification.needs_human_review ? ' — NEEDS HUMAN REVIEW' : ''}${data.classification.topic ? ` — topic: ${data.classification.topic}` : ''}.`
+    : 'Classification: none yet (mock AI pending).';
+  panel.appendChild(cls);
+  if (data.suggestion) {
+    const sp = document.createElement('p');
+    sp.textContent = `Linked AI suggestion (${data.suggestion.review_status}, mock): ${data.suggestion.output_text}`;
+    panel.appendChild(sp);
+  }
+  if (data.policyReview) {
+    const pp = document.createElement('p');
+    pp.textContent = `Policy review (${data.policyReview.checker}, mock AI): ${data.policyReview.verdict}${data.policyReview.notes ? ` — ${data.policyReview.notes}` : ''}.`;
+    panel.appendChild(pp);
+  }
+  if (data.history && data.history.length > 0) {
+    const hp = document.createElement('p');
+    hp.textContent = `History: ${data.history.map((h) => `${h.action} (${new Date(h.created_at).toLocaleString()})`).join(' · ')}`;
+    panel.appendChild(hp);
+  }
+  $('#comment-recommendation').textContent = data.recommendedAction
+    ? `Recommended action (mock AI): ${data.recommendedAction.action}${data.recommendedAction.reason ? ` — ${data.recommendedAction.reason}` : ''}.`
+    : (data.recommendationNote || '');
+  showMessage(`Comment ${commentId} opened.`);
+}
+
+function requireSelectedComment() {
+  const id = selectedCommentId || $('#comment-id').value;
+  if (!id) {
+    showMessage('Open a comment first.');
+    return null;
+  }
+  return id;
+}
+
+async function getCommentAiDraft() {
+  const id = requireSelectedComment();
+  if (!id) return;
+  const { ok, status, data } = await api(`/api/comments/${id}/draft-reply`, { method: 'POST', body: { facts: {} } });
+  if (!ok) return showError(data, `AI draft failed (${status}).`);
+  if (data.escalated) {
+    showMessage(`Mock AI escalated this comment instead of drafting a reply (task ${data.taskId || '—'}). No reply was drafted.`);
+    return;
+  }
+  $('#comment-reply-text').value = data.text || '';
+  $('#comment-suggestion-id').value = data.suggestionId || '';
+  $('#comment-suggestion-info').textContent = data.suggestionId
+    ? `Mock AI suggestion ${data.suggestionId} (provider: ${data.provider || 'mock'}). Edit it above, then request approval to reply — or discard it.`
+    : 'Mock AI returned no suggestion.';
+  showMessage(data.note || 'Mock AI draft ready — edit it, then request approval to reply.');
+}
+
+async function requestCommentReply() {
+  const id = requireSelectedComment();
+  if (!id) return;
+  const text = $('#comment-reply-text').value;
+  if (!text.trim()) return showMessage('Enter reply text first (or get an AI draft).');
+  const suggestionId = $('#comment-suggestion-id').value || null;
+  const { ok, status, data } = await api(`/api/comments/${id}/request-reply`, { method: 'POST', body: { text, suggestionId } });
+  if (!ok) return showError(data, `Request reply failed (${status}).`);
+  const policyNote = data.policy?.checked
+    ? ` Policy verdict: ${data.policy.verdict}${data.policy.verdict === 'block' ? ' (advisory — the approver decides)' : ''}.`
+    : ' Policy check was not run (Agent 7 absent).';
+  showMessage(`Reply approval requested (${data.approvalId}).${policyNote} See the approval queue below.`);
+  await loadApprovals();
+}
+
+async function requestCommentModeration(kind) {
+  const id = requireSelectedComment();
+  if (!id) return;
+  const { ok, status, data } = await api(`/api/comments/${id}/request-${kind}`, { method: 'POST', body: {} });
+  if (!ok) return showError(data, `Request ${kind} failed (${status}).`);
+  showMessage(`${kind === 'hide' ? 'Hide' : 'Delete'} approval requested (${data.approvalId}). An Admin/Owner must approve it. See the approval queue below.`);
+  await loadApprovals();
+}
+
+function discardCommentDraft() {
+  $('#comment-reply-text').value = '';
+  $('#comment-suggestion-id').value = '';
+  $('#comment-suggestion-info').textContent = 'Draft discarded — nothing was posted.';
+  showMessage('Reply draft discarded.');
+}
+
+async function correctCommentClassification() {
+  const id = requireSelectedComment();
+  if (!id) return;
+  const classification = $('#comment-correct-classification').value;
+  const { ok, status, data } = await api(`/api/comments/${id}/correct-classification`, { method: 'POST', body: { classification } });
+  if (!ok) return showError(data, `Correct classification failed (${status}).`);
+  showMessage(`Classification corrected to ${data.classification.classification} (recorded as a user correction).`);
+  await loadComments();
+  await openComment(id);
+}
+
+async function setCommentStatus() {
+  const id = requireSelectedComment();
+  if (!id) return;
+  const status = $('#comment-status').value;
+  const { ok, status: httpStatus, data } = await api(`/api/comments/${id}/status`, { method: 'POST', body: { status } });
+  if (!ok) return showError(data, `Set status failed (${httpStatus}).`);
+  showMessage(`Comment ${id} status: ${data.comment.status}.`);
+  await loadComments();
+}
+
+async function assignComment() {
+  const id = requireSelectedComment();
+  if (!id) return;
+  const userId = $('#comment-assign-user').value.trim();
+  if (!userId) return showMessage('Enter a user ID to assign.');
+  const { ok, status, data } = await api(`/api/comments/${id}/assign`, { method: 'POST', body: { userId } });
+  if (!ok) return showError(data, `Assign failed (${status}).`);
+  showMessage(`Comment ${id} assigned to ${data.assignedTo}.`);
+}
+
+async function escalateComment() {
+  const id = requireSelectedComment();
+  if (!id) return;
+  const reason = $('#comment-escalate-reason').value.trim();
+  if (!reason) return showMessage('Enter an escalation reason.');
+  const { ok, status, data } = await api(`/api/comments/${id}/escalate`, { method: 'POST', body: { reason } });
+  if (!ok) return showError(data, `Escalate failed (${status}).`);
+  showMessage(`Escalation task created (${data.task.id}); comment flagged.`);
+  await loadComments();
+}
+
+async function markCommentSourceRemoved() {
+  const id = requireSelectedComment();
+  if (!id) return;
+  const { ok, status, data } = await api(`/api/comments/${id}/mock-source-removed`, { method: 'POST', body: {} });
+  if (!ok) return showError(data, `Mark source-removed failed (${status}).`);
+  showMessage(`Comment ${id} marked removed on source (mock). Replies and moderation are now refused.`);
+  await loadComments();
+  await openComment(id);
+}
+
+$('#comments-filter-form').addEventListener('submit', (ev) => { ev.preventDefault(); loadComments(); });
+$('#comments-filter-clear-btn').addEventListener('click', () => {
+  $('#comments-filter-classification').value = '';
+  $('#comments-filter-post').value = '';
+  $('#comments-filter-status').value = '';
+  $('#comments-filter-from').value = '';
+  $('#comments-filter-to').value = '';
+  loadComments();
+});
+$('#refresh-comments-btn').addEventListener('click', loadComments);
+$('#comment-ai-draft-btn').addEventListener('click', getCommentAiDraft);
+$('#comment-request-reply-btn').addEventListener('click', requestCommentReply);
+$('#comment-request-hide-btn').addEventListener('click', () => requestCommentModeration('hide'));
+$('#comment-request-delete-btn').addEventListener('click', () => requestCommentModeration('delete'));
+$('#comment-discard-btn').addEventListener('click', discardCommentDraft);
+$('#comment-correct-btn').addEventListener('click', correctCommentClassification);
+$('#comment-set-status-btn').addEventListener('click', setCommentStatus);
+$('#comment-assign-btn').addEventListener('click', assignComment);
+$('#comment-escalate-btn').addEventListener('click', escalateComment);
+$('#comment-source-removed-btn').addEventListener('click', markCommentSourceRemoved);
+
 // Restore a previous session, if the server still accepts the token.
 (async () => {
   if (!token) return;
@@ -834,6 +1076,7 @@ $('#refresh-scheduled-btn').addEventListener('click', loadScheduled);
     await loadDrafts();
     await loadScheduled();
     await loadInbox();
+    await loadComments();
   } else {
     setSignedOut();
   }

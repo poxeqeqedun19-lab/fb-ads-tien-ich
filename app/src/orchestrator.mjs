@@ -15,6 +15,7 @@ import { enqueue } from './jobs.mjs';
 import { reviewDraft } from './agents/policy.mjs';
 import { generateMockDraft } from './agents/content.mjs';
 import { handleInbound } from './agents/support.mjs';
+import { handleComment } from './agents/community.mjs';
 
 export const NO_WORKER_REASON = 'Phase 1 scaffolding — no worker agents connected yet';
 
@@ -356,3 +357,36 @@ async function inboxFlowWorker(db, task, opts = {}) {
 }
 
 registerWorker('inbox_flow', inboxFlowWorker);
+
+/**
+ * 'comment_flow' — Agent 3 handling of one comment.
+ * contextRefs: { commentId, authorId?, facts? }. Runs handleComment:
+ * classify the comment, then draft a reply (or recommend hide /
+ * escalate). Like 'inbox_flow', this worker is internal-only: it
+ * never executes a public action — a reply/hide/delete reaches the
+ * public only through the reply_comment / hide_comment /
+ * delete_comment approval executors (src/agents/community.mjs).
+ * Returns { commentId, classification, recommendation, draft? |
+ * escalated, taskId? }.
+ */
+async function commentFlowWorker(db, task, opts = {}) {
+  const contextRefs = task.contextRefs ?? {};
+  const { commentId } = contextRefs;
+  if (!commentId) throw Object.assign(new Error('comment_flow task requires contextRefs.commentId'), { code: 'validation_error' });
+  const result = handleComment(db, {
+    tenantId: task.tenant_id,
+    commentId,
+    authorId: contextRefs.authorId ?? opts?.actorId ?? null,
+    facts: Array.isArray(contextRefs.facts) ? contextRefs.facts : [],
+  });
+  return {
+    commentId,
+    classification: result.classification,
+    recommendation: result.recommendation,
+    draft: result.draft ?? null,
+    escalated: result.escalated ?? false,
+    taskId: result.taskId ?? null,
+  };
+}
+
+registerWorker('comment_flow', commentFlowWorker);

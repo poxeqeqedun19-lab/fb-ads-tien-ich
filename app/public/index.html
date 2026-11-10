@@ -188,6 +188,89 @@
     <button id="inbox-create-lead-btn" type="button">Save as lead (internal only)</button>
     <p><a href="#approvals-table">Approval queue</a> — send approvals appear there; a different Owner/Admin must approve the exact text before anything is sent.</p>
 
+    <h2>Comment Management (mock)</h2>
+    <p class="banner" role="note"><strong>Mock Meta provider — no real Meta account connected.</strong> Comments below are mock/test data: comments arrive through the mock ingest endpoint and replies / hides / deletes are mock actions that require approval. AI classification and reply drafts are mock output, not produced by a real AI provider. Nothing here posts, hides, or deletes on a real account.</p>
+    <form id="comments-filter-form">
+      <label>Classification
+        <select id="comments-filter-classification">
+          <option value="">any</option>
+          <option value="question">question</option>
+          <option value="praise">praise</option>
+          <option value="complaint">complaint</option>
+          <option value="spam">spam</option>
+          <option value="other">other</option>
+        </select>
+      </label>
+      <label>Post ID <input id="comments-filter-post" type="text" placeholder="local post id"></label>
+      <label>Status
+        <select id="comments-filter-status">
+          <option value="">any</option>
+          <option value="new">new</option>
+          <option value="replied">replied</option>
+          <option value="hidden">hidden</option>
+          <option value="deleted">deleted</option>
+          <option value="flagged">flagged</option>
+          <option value="resolved">resolved</option>
+        </select>
+      </label>
+      <label>From <input id="comments-filter-from" type="date"></label>
+      <label>To <input id="comments-filter-to" type="date"></label>
+      <button type="submit">Filter</button>
+      <button id="comments-filter-clear-btn" type="button">Clear filters</button>
+    </form>
+    <h3>Comments</h3>
+    <button id="refresh-comments-btn" type="button">Refresh comments</button>
+    <table id="comments-table">
+      <thead>
+        <tr><th>Post</th><th>Author</th><th>Text</th><th>Time</th><th>Status</th><th>Classification (mock AI)</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="comments-body"><tr><td colspan="7">Comments not loaded yet.</td></tr></tbody>
+    </table>
+
+    <h3>Comment detail</h3>
+    <div id="comment-detail">No comment selected.</div>
+    <div id="comment-recommendation"></div>
+
+    <h3>Reply (mock AI draft + approval)</h3>
+    <p class="muted">AI drafting is mock only: the suggestion is labelled mock and nothing is posted until a different Admin/Owner approver approves the exact text in the approval queue below.</p>
+    <form id="comment-reply-form">
+      <label>Reply text <textarea id="comment-reply-text" rows="4" cols="60"></textarea></label>
+      <input id="comment-id" type="hidden">
+      <input id="comment-suggestion-id" type="hidden">
+      <button id="comment-ai-draft-btn" type="button">Get AI draft (mock)</button>
+      <button id="comment-request-reply-btn" type="button">Request approval to reply</button>
+      <button id="comment-discard-btn" type="button">Discard draft</button>
+    </form>
+    <p id="comment-suggestion-info" class="muted"></p>
+
+    <h3>Comment actions</h3>
+    <button id="comment-request-hide-btn" type="button">Request hide (Admin/Owner decides)</button>
+    <button id="comment-request-delete-btn" type="button">Request delete (Admin/Owner decides)</button>
+    <label>Correct classification
+      <select id="comment-correct-classification">
+        <option value="question">question</option>
+        <option value="praise">praise</option>
+        <option value="complaint">complaint</option>
+        <option value="spam">spam</option>
+        <option value="other">other</option>
+      </select>
+    </label>
+    <button id="comment-correct-btn" type="button">Correct classification</button>
+    <label>Status
+      <select id="comment-status">
+        <option value="new">new</option>
+        <option value="flagged">flagged</option>
+        <option value="resolved">resolved</option>
+      </select>
+    </label>
+    <button id="comment-set-status-btn" type="button">Set status</button>
+    <label>Assign to user ID <input id="comment-assign-user" type="text" placeholder="user id"></label>
+    <button id="comment-assign-btn" type="button">Assign</button>
+    <label>Escalation reason <input id="comment-escalate-reason" type="text"></label>
+    <button id="comment-escalate-btn" type="button">Escalate (create task)</button>
+    <button id="comment-source-removed-btn" type="button">Mark removed on source (mock)</button>
+    <p><a href="#approvals-table">Approval queue</a> — reply / hide / delete approvals appear there; a different Admin/Owner must approve the exact text or action before anything posts, hides, or deletes.</p>
+
     <h3>Approval queue (asset management)</h3>
     <button id="refresh-approvals-btn" type="button">Refresh approval queue</button>
     <table id="approvals-table">

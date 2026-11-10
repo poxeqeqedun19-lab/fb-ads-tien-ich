@@ -64,6 +64,22 @@ try {
   }
 }
 
+// Comment routes (Module D, Phase 4) are registered by createApp when
+// the module is present, same pattern as the inbox routes above.
+// Reply / hide / delete EXECUTION lives in the other stream's
+// executors (defaultExecutors entries for reply_comment /
+// hide_comment / delete_comment); this file only registers the routes.
+let registerCommentRoutes = null;
+try {
+  ({ registerCommentRoutes } = await import('./modules/comments.mjs'));
+} catch (err) {
+  if (err?.code === 'ERR_MODULE_NOT_FOUND') {
+    console.warn('[meta-business-os] WARNING: src/modules/comments.mjs is not present — Comment Management routes unavailable until the comments worker delivers it.');
+  } else {
+    throw err;
+  }
+}
+
 // Agent 4 send executor (other stream's file src/agents/support.mjs):
 // executeSendMessage(db, payload, approval, actorId). Absent until that
 // stream delivers it — the send_message executor below then reports
@@ -180,6 +196,18 @@ function compilePattern(pattern) {
     })
     .join('/');
   return { regex: new RegExp(`^${regexSource}$`), paramNames };
+}
+
+/**
+ * Owner-or-Admin check (Phase 4, D-6). Uses the same role idiom as
+ * rbac.mjs canApprove/canAccessAsset (`roles.some(r => r === 'Owner'
+ * || r === 'Admin')`) — there is no narrower role helper to reuse,
+ * and approvals.decide alone is not the check: a future role holding
+ * approvals.decide must still not decide/execute a comment
+ * hide/delete unless it is Owner/Admin.
+ */
+export function isOwnerOrAdmin(user) {
+  return Boolean(user?.roles?.some((role) => role === 'Owner' || role === 'Admin'));
 }
 
 /** Default sensitive-action executors, keyed by approval action_type. */
@@ -436,16 +464,47 @@ export function createApp({ db, config, services = {} }) {
 
   registerRoute('POST', '/api/approvals/:id/decide', { permission: 'approvals.decide' }, async (ctx) => {
     const { decision, note } = ctx.body ?? {};
+    // Phase 4 (D-6): hiding or deleting a comment requires an
+    // Owner/Admin decider. Checked BEFORE decideApproval runs, and
+    // audited — fail closed. A Viewer/Editor can REQUEST hide/delete
+    // (request routes to Admin/Owner approval) but can never decide
+    // it. The route permission above already keeps Editor/Viewer out
+    // of this route; this gate is defence in depth for any role that
+    // holds approvals.decide without being Owner/Admin.
+    const existing = getApprovalById(db, ctx.params.id);
+    if (
+      existing &&
+      (existing.action_type === 'hide_comment' || existing.action_type === 'delete_comment') &&
+      !isOwnerOrAdmin(ctx.user)
+    ) {
+      const blockedAction =
+        existing.action_type === 'hide_comment' ? 'comment.hide_decide_blocked' : 'comment.delete_decide_blocked';
+      auditSafe({
+        tenantId: ctx.user.tenantId,
+        actorId: ctx.user.id,
+        actorType: 'user',
+        action: blockedAction,
+        targetType: 'approval',
+        targetId: existing.id,
+        details: { actionType: existing.action_type, reason: 'hide/delete decisions require Owner/Admin' },
+        ipAddress: ctx.ip,
+      });
+      throw new HttpError(403, 'forbidden', 'Hiding or deleting a comment requires an Owner or Admin decider');
+    }
     const approval = decideApproval(db, { approvalId: ctx.params.id, decidedBy: ctx.user, decision, note }, { expiryHours: config?.approvalExpiryHours });
     // Module hooks, dispatched by action_type (Phase 2: Content Studio
     // moves a post to approved/scheduled/refused when its publish
     // approval is decided; Phase 3: the inbox hook verifies the send
-    // suggestion / marks it rejected). A hook failure must never fail
+    // suggestion / marks it rejected; Phase 4: the comment hook marks
+    // the linked reply suggestion approved/rejected — it never changes
+    // comment status on approve). A hook failure must never fail
     // the decision itself.
     try {
       const hook = approval.action_type === 'send_message'
         ? (services.onSendApprovalDecided ?? services.onApprovalDecided)
-        : services.onApprovalDecided;
+        : approval.action_type === 'reply_comment' || approval.action_type === 'hide_comment' || approval.action_type === 'delete_comment'
+          ? (services.onCommentApprovalDecided ?? services.onApprovalDecided)
+          : services.onApprovalDecided;
       await hook?.(db, approval, { actorId: ctx.user.id, ip: ctx.ip });
     } catch (err) {
       console.error('[meta-business-os] onApprovalDecided hook failed:', err?.message);
@@ -457,6 +516,27 @@ export function createApp({ db, config, services = {} }) {
     const approval = getApprovalById(db, ctx.params.id);
     if (!approval) throw new HttpError(404, 'not_found', 'Approval not found');
     if (approval.tenant_id !== ctx.user.tenantId) throw new HttpError(403, 'forbidden', 'Approval belongs to another tenant');
+    // Phase 4 (D-6): hiding or deleting a comment requires an
+    // Owner/Admin executor, checked BEFORE execution (same gate as
+    // the decide route above; the executors re-verify it as well).
+    if (
+      (approval.action_type === 'hide_comment' || approval.action_type === 'delete_comment') &&
+      !isOwnerOrAdmin(ctx.user)
+    ) {
+      const blockedAction =
+        approval.action_type === 'hide_comment' ? 'comment.hide_execute_blocked' : 'comment.delete_execute_blocked';
+      auditSafe({
+        tenantId: ctx.user.tenantId,
+        actorId: ctx.user.id,
+        actorType: 'user',
+        action: blockedAction,
+        targetType: 'approval',
+        targetId: approval.id,
+        details: { actionType: approval.action_type, reason: 'hide/delete execution requires Owner/Admin' },
+        ipAddress: ctx.ip,
+      });
+      throw new HttpError(403, 'forbidden', 'Hiding or deleting a comment requires an Owner or Admin executor');
+    }
     const executors = { ...defaultExecutors, ...(services.executors ?? {}) };
     const executor = executors[approval.action_type];
     if (typeof executor !== 'function') {
@@ -512,6 +592,11 @@ export function createApp({ db, config, services = {} }) {
   // Inbox routes (Module C, Phase 3).
   if (typeof registerInboxRoutes === 'function') {
     registerInboxRoutes({ registerRoute });
+  }
+
+  // Comment routes (Module D, Phase 4).
+  if (typeof registerCommentRoutes === 'function') {
+    registerCommentRoutes({ registerRoute });
   }
 
   // ---- Handler -----------------------------------------------------------

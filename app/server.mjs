@@ -8,17 +8,38 @@
 // Phase 3: Unified Inbox's send-approval hook is wired via services;
 // the send_message executor lives in src/http.mjs defaultExecutors and
 // delegates to Agent 4's executeSendMessage when that stream delivers it.
+// Phase 4: Comment Management's approval hook and the reply/hide/delete
+// executors are wired via services (Agent 3, src/agents/community.mjs).
 import http from 'node:http';
 import { loadConfig } from './src/config.mjs';
 import { createDb, closeDb } from './src/db.mjs';
 import { createApp } from './src/http.mjs';
 import { onPublishApprovalDecided, buildContentJobHandlers } from './src/modules/content.mjs';
 import { onSendApprovalDecided } from './src/modules/inbox.mjs';
+import {
+  onCommentApprovalDecided,
+  executeReplyComment,
+  executeHideComment,
+  executeDeleteComment,
+} from './src/agents/community.mjs';
 import { runDue } from './src/jobs.mjs';
 
 const config = loadConfig();
 const db = createDb(config.dbPath);
-const app = createApp({ db, config, services: { onApprovalDecided: onPublishApprovalDecided, onSendApprovalDecided } });
+const app = createApp({
+  db,
+  config,
+  services: {
+    onApprovalDecided: onPublishApprovalDecided,
+    onSendApprovalDecided,
+    onCommentApprovalDecided,
+    executors: {
+      reply_comment: executeReplyComment,
+      hide_comment: executeHideComment,
+      delete_comment: executeDeleteComment,
+    },
+  },
+});
 
 // Job worker: run due jobs every 30 s. runDue calls a handler as
 // handler(job), while the content job handler takes (db, job), so the

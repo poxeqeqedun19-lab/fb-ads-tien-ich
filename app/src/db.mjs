@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS asset_tokens (
 CREATE TABLE IF NOT EXISTS approvals (
   id TEXT PRIMARY KEY,
   tenant_id TEXT NOT NULL REFERENCES tenants(id),
-  action_type TEXT NOT NULL CHECK (action_type IN ('publish_post','send_message','budget_change','delete','manage_asset','moderate_comment')),
+  action_type TEXT NOT NULL CHECK (action_type IN ('publish_post','send_message','budget_change','delete','manage_asset','moderate_comment','reply_comment','hide_comment','delete_comment')),
   target_type TEXT,
   target_id TEXT,
   target_version TEXT,
@@ -324,6 +324,69 @@ CREATE INDEX IF NOT EXISTS idx_classifications_tenant_conversation ON message_cl
 CREATE INDEX IF NOT EXISTS idx_leads_tenant_status_created ON leads (tenant_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant_status_created ON tasks (tenant_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_tenant_conversation ON tasks (tenant_id, conversation_id);
+-- Phase 4 — Comment Management (Module D). Status / moderation_action
+-- enums and classification / policy-review shapes follow
+-- docs/DATABASE_DESIGN.md §3.9 and the Phase 4 task spec. Latest
+-- classification wins by created_at DESC, rowid DESC (same convention
+-- as Phase 3 message_classifications).
+CREATE TABLE IF NOT EXISTS comments (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  asset_id TEXT NOT NULL REFERENCES connected_assets(id),
+  post_id TEXT REFERENCES posts(id),
+  meta_post_id TEXT,
+  meta_comment_id TEXT NOT NULL,
+  parent_comment_id TEXT REFERENCES comments(id),
+  author_meta_id TEXT,
+  author_name TEXT,
+  body_text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','replied','hidden','deleted','flagged','resolved')),
+  moderation_action TEXT NOT NULL DEFAULT 'none' CHECK (moderation_action IN ('none','replied','hidden','deleted','reported')),
+  moderated_by TEXT,
+  moderated_at TEXT,
+  is_from_page INTEGER NOT NULL DEFAULT 0,
+  removed_on_source INTEGER NOT NULL DEFAULT 0,
+  removed_on_source_at TEXT,
+  deleted_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS comment_classifications (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  comment_id TEXT NOT NULL REFERENCES comments(id),
+  classification TEXT NOT NULL CHECK (classification IN ('question','praise','complaint','spam','other')),
+  sentiment TEXT,
+  topic TEXT,
+  urgency TEXT CHECK (urgency IN ('low','normal','high')),
+  confidence REAL,
+  needs_human_review INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT 'ai' CHECK (source IN ('ai','user_correction')),
+  corrected_from TEXT,
+  corrected_by TEXT,
+  created_at TEXT NOT NULL,
+  -- updated_at is NOT in the Phase 4 task-spec column list, but the
+  -- delivered Agent 3 (src/agents/community.mjs, other stream) writes
+  -- it on every classification insert (like Phase 3's
+  -- message_classifications, which has updated_at). Kept nullable so
+  -- inserts that omit it still work; interop divergence, recorded.
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS comment_policy_reviews (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  comment_id TEXT NOT NULL REFERENCES comments(id),
+  checker TEXT NOT NULL DEFAULT 'policy-rules-v1',
+  verdict TEXT NOT NULL CHECK (verdict IN ('pass','pass_with_notes','flag_for_human_review','block')),
+  findings TEXT NOT NULL DEFAULT '[]',
+  notes TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_comments_tenant_meta_comment ON comments (tenant_id, meta_comment_id);
+CREATE INDEX IF NOT EXISTS idx_comments_tenant_asset_status_created ON comments (tenant_id, asset_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_comment_classifications_comment_created ON comment_classifications (comment_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_comment_classifications_tenant_comment ON comment_classifications (tenant_id, comment_id);
+CREATE INDEX IF NOT EXISTS idx_comment_policy_reviews_tenant_comment ON comment_policy_reviews (tenant_id, comment_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_posts_tenant_meta_post ON posts (tenant_id, meta_post_id);
 CREATE INDEX IF NOT EXISTS idx_ai_jobs_tenant_requested ON ai_jobs (tenant_id, requested_by, created_at);
 CREATE INDEX IF NOT EXISTS idx_ai_suggestions_tenant_job ON ai_suggestions (tenant_id, ai_job_id);
@@ -351,6 +414,13 @@ export function createDb(dbPath) {
   const db = new DatabaseSync(path);
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(SCHEMA);
+  // Phase 4: tasks gain a nullable comment_id link (escalation tasks for
+  // comments). Idempotent: a DB created before Phase 4 keeps working.
+  const taskColumns = db.prepare('PRAGMA table_info(tasks)').all().map((c) => c.name);
+  if (!taskColumns.includes('comment_id')) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN comment_id TEXT REFERENCES comments(id)`);
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_tenant_comment ON tasks (tenant_id, comment_id)');
   seedRolePermissions(db);
   return db;
 }

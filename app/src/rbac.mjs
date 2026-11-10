@@ -3,6 +3,12 @@
 // Phase 2 keys: drafts.* / ai.draft. Phase 3 keys (wired for real):
 // inbox.view / inbox.reply / inbox.assign / inbox.manage (Viewer: view
 // only; Editor: view/reply/assign/manage; Admin/Owner: all).
+// Phase 4 keys: comments.view / comments.reply / comments.assign /
+// comments.moderate (same shape: Viewer view only; Editor all four).
+// Hide/delete decision + execution is Admin/Owner-only — enforced at
+// decide/execute time by the moderation executor (other stream), NOT
+// by these keys: an Editor may REQUEST hide/delete, only an
+// Admin/Owner may decide/execute it.
 export const ROLES = Object.freeze(['Owner', 'Admin', 'Editor', 'Viewer']);
 
 // '*' means all permissions (Owner only).
@@ -26,6 +32,10 @@ export const ROLE_PERMISSIONS = Object.freeze({
     'inbox.reply',
     'inbox.assign',
     'inbox.manage',
+    'comments.view',
+    'comments.reply',
+    'comments.assign',
+    'comments.moderate',
   ]),
   Editor: Object.freeze([
     'assets.view', // assigned assets only (see canAccessAsset)
@@ -40,11 +50,16 @@ export const ROLE_PERMISSIONS = Object.freeze({
     'inbox.reply',
     'inbox.assign',
     'inbox.manage',
+    'comments.view',
+    'comments.reply',
+    'comments.assign',
+    'comments.moderate',
   ]),
   Viewer: Object.freeze([
     'assets.view', // assigned assets only (see canAccessAsset)
     'drafts.view',
     'inbox.view',
+    'comments.view',
   ]),
 });
 
@@ -55,11 +70,25 @@ export const ACTION_TYPES = Object.freeze([
   'delete',
   'manage_asset',
   'moderate_comment',
+  // Phase 4 comment-moderation approvals (Module D): reply, hide and
+  // delete are separate action types so each approval binds exactly the
+  // action the approver saw. Payloads: reply_comment {text,
+  // suggestionId}; hide_comment / delete_comment {action, reason?}.
+  'reply_comment',
+  'hide_comment',
+  'delete_comment',
 ]);
 
 // Sensitive action types that only Owner/Admin may approve, even when the
-// approver otherwise holds approvals.decide.
-export const OWNER_ADMIN_ONLY_ACTIONS = Object.freeze(['manage_asset', 'budget_change', 'delete']);
+// approver otherwise holds approvals.decide. Phase 4: hide_comment and
+// delete_comment only — reply_comment is deliberately NOT in this list:
+// AI_AGENT_ARCHITECTURE.md (Agent 3) requires reply approval by an
+// Editor or above, while hide/delete require Admin/Owner. Integration
+// fix I-1 (coordinator verification): Stream 1 had listed all three
+// comment action types here; that changed no behaviour today (Editor
+// holds no approvals.decide permission at all) but would have wrongly
+// blocked a future decide-holding Editor from approving replies.
+export const OWNER_ADMIN_ONLY_ACTIONS = Object.freeze(['manage_asset', 'budget_change', 'delete', 'hide_comment', 'delete_comment']);
 
 /**
  * User shape: { id, tenantId, roles: string[] }.

@@ -101,23 +101,25 @@ function finding(ruleId, matched) {
 }
 
 /**
- * Review a draft post against the deterministic rule set.
+ * Text-level review core: apply the SAME five rules R-01..R-05 (plus
+ * the NOTE-LINK note) to any text. Pure computation — writes nothing.
+ * reviewDraft wraps it for posts (Phase 2 behaviour, unchanged);
+ * reviewCommentReply wraps it for comment replies (Phase 4). No new
+ * rules are added here, and no policy is invented: a rule fires only
+ * from the deterministic patterns below, each citing its doc.
  *
- * @param {object} db - DatabaseSync handle.
+ * @param {object} db - DatabaseSync handle (accepted for signature
+ *   symmetry with reviewDraft/reviewCommentReply; not read).
  * @param {object} opts
  * @param {string} opts.tenantId
- * @param {string} opts.postId
- * @param {string[]} [opts.knownFacts=[]] - user-provided fact strings
- *   (e.g. brief offer text). A figure that appears verbatim in a known
- *   fact is allowed; otherwise R-01 flags it.
- * @returns {{ review, verdict, findings }}
+ * @param {string} opts.text - the text under review.
+ * @param {string[]} [opts.knownFacts=[]] - user-provided fact strings.
+ *   A figure that appears verbatim in a known fact is allowed;
+ *   otherwise R-01 flags it.
+ * @returns {{ verdict, findings }}
  */
-export function reviewDraft(db, { tenantId, postId, knownFacts = [] }) {
-  const post = db.prepare('SELECT * FROM posts WHERE id = ? AND tenant_id = ?').get(postId, tenantId);
-  if (!post) throw Object.assign(new Error('Post not found'), { code: 'not_found' });
-
+export function reviewText(db, { tenantId, text, knownFacts = [] }) {
   const facts = Array.isArray(knownFacts) ? knownFacts.filter((f) => typeof f === 'string') : [];
-  const text = `${post.title ?? ''}\n${post.body_text ?? ''}`;
   const findings = [];
 
   // R-01: figures/prices not in the user-provided facts.
@@ -166,10 +168,34 @@ export function reviewDraft(db, { tenantId, postId, knownFacts = [] }) {
   else if (findings.some((f) => f.severity === 'flag')) verdict = 'flag_for_human_review';
   else if (findings.some((f) => f.severity === 'note')) verdict = 'pass_with_notes';
 
-  const notes =
-    findings.length === 0
-      ? 'No issues found — no rule triggered'
-      : findings.map((f) => `${f.ruleId} (${f.severity})`).join('; ');
+  return { verdict, findings };
+}
+
+function notesForFindings(findings) {
+  return findings.length === 0
+    ? 'No issues found — no rule triggered'
+    : findings.map((f) => `${f.ruleId} (${f.severity})`).join('; ');
+}
+
+/**
+ * Review a draft post against the deterministic rule set.
+ *
+ * @param {object} db - DatabaseSync handle.
+ * @param {object} opts
+ * @param {string} opts.tenantId
+ * @param {string} opts.postId
+ * @param {string[]} [opts.knownFacts=[]] - user-provided fact strings
+ *   (e.g. brief offer text). A figure that appears verbatim in a known
+ *   fact is allowed; otherwise R-01 flags it.
+ * @returns {{ review, verdict, findings }}
+ */
+export function reviewDraft(db, { tenantId, postId, knownFacts = [] }) {
+  const post = db.prepare('SELECT * FROM posts WHERE id = ? AND tenant_id = ?').get(postId, tenantId);
+  if (!post) throw Object.assign(new Error('Post not found'), { code: 'not_found' });
+
+  const text = `${post.title ?? ''}\n${post.body_text ?? ''}`;
+  const { verdict, findings } = reviewText(db, { tenantId, text, knownFacts });
+  const notes = notesForFindings(findings);
 
   const now = nowIso();
   const reviewId = newId();
@@ -189,6 +215,60 @@ export function reviewDraft(db, { tenantId, postId, knownFacts = [] }) {
   });
 
   const row = db.prepare('SELECT * FROM post_policy_reviews WHERE id = ?').get(reviewId);
+  const review = { ...row, findings: JSON.parse(row.findings ?? '[]') };
+  return { review, verdict, findings };
+}
+
+/**
+ * Review a comment reply against the SAME deterministic rule set
+ * (Phase 4 extension of Agent 7 to comment replies; B-12 stays OPEN
+ * for inbox replies — reviewDraft is still the only post path and
+ * this function never touches inbox flows).
+ *
+ * The verdict is ADVISORY only: it never approves, refuses, deletes,
+ * or blocks a reply by itself. A 'block' verdict is a recommendation
+ * that goes to the human approver, who decides. The only thing this
+ * function writes is a comment_policy_reviews row (plus the audit
+ * entry); the comment and the draft are never modified.
+ *
+ * @param {object} db - DatabaseSync handle.
+ * @param {object} opts
+ * @param {string} opts.tenantId
+ * @param {string} opts.commentId
+ * @param {string} opts.text - the reply text under review.
+ * @param {string[]} [opts.knownFacts=[]] - user-provided fact strings.
+ *   A figure that appears verbatim in a known fact is allowed;
+ *   otherwise R-01 flags it.
+ * @returns {{ review, verdict, findings }}
+ */
+export function reviewCommentReply(db, { tenantId, commentId, text, knownFacts = [] }) {
+  if (typeof text !== 'string' || !text) {
+    throw Object.assign(new Error('reviewCommentReply requires non-empty text'), { code: 'validation_error' });
+  }
+  const comment = db.prepare('SELECT * FROM comments WHERE id = ? AND tenant_id = ?').get(commentId, tenantId);
+  if (!comment) throw Object.assign(new Error('Comment not found'), { code: 'not_found' });
+
+  const { verdict, findings } = reviewText(db, { tenantId, text, knownFacts });
+  const notes = notesForFindings(findings);
+
+  const now = nowIso();
+  const reviewId = newId();
+  db.prepare(
+    `INSERT INTO comment_policy_reviews (id, tenant_id, comment_id, checker, verdict, findings, notes, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(reviewId, tenantId, commentId, POLICY_CHECKER, verdict, JSON.stringify(findings), notes, now);
+
+  appendAudit(db, {
+    tenantId,
+    actorId: null,
+    actorType: 'system',
+    action: 'comment.policy_reviewed',
+    targetType: 'comment',
+    targetId: commentId,
+    details: { commentId, verdict, ruleIds: findings.map((f) => f.ruleId) },
+  });
+
+  const row = db.prepare('SELECT * FROM comment_policy_reviews WHERE id = ?').get(reviewId);
   const review = { ...row, findings: JSON.parse(row.findings ?? '[]') };
   return { review, verdict, findings };
 }

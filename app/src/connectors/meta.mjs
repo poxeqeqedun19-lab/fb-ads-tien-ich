@@ -300,6 +300,118 @@ export class MetaConnector {
   }
 
   /**
+   * Read comments on a post (Phase 4 seam, mock only). Real mode
+   * throws NOT_VERIFIED. Mock mode returns an empty list: in mock
+   * mode the platform's own database IS the comment store (comments
+   * are ingested into the comments table by the comments module), so
+   * there is nothing to fetch from Meta — this method exists only so
+   * the real client can fill it later.
+   *
+   * NOT invented here: comment capabilities were NEVER verified, so
+   * no comment endpoint, permission, limit, or quota is ever named,
+   * built, or claimed. No comment content is invented.
+   */
+  readComments({ asset, post } = {}) {
+    if (this.mode === 'real') throw notVerifiedError();
+    if (!asset?.id || !post?.id) {
+      throw new Error('readComments: asset and post with ids are required');
+    }
+    return { mock: true, provider: 'mock', comments: [] };
+  }
+
+  /**
+   * Post a public reply to a comment (Phase 4, mock only). Real mode
+   * throws NOT_VERIFIED (V-19/V-20) like every other real-mode
+   * method. Mock mode returns a labelled mock id; the network is
+   * never touched. This method performs NO approval check, so it
+   * must only ever be called from the reply_comment approval
+   * executor (src/agents/community.mjs).
+   *
+   * NOT invented here: no comment endpoint, permission, limit, or
+   * quota is ever named, built, or claimed.
+   * @param {object} opts
+   * @param {object} opts.asset - connected_assets row.
+   * @param {object} opts.comment - comments row.
+   * @param {string} opts.text - exact approved text to post.
+   */
+  replyComment({ asset, comment, text } = {}) {
+    if (this.mode === 'real') throw notVerifiedError();
+    if (!asset?.id || !comment?.id) {
+      throw new Error('replyComment: asset and comment with ids are required');
+    }
+    if (typeof text !== 'string' || !text.trim()) {
+      throw Object.assign(new Error('replyComment: non-empty text is required'), { code: 'validation_error' });
+    }
+    if (asset.status !== 'connected') {
+      throw Object.assign(
+        new Error(`Mock reply failed: asset is ${asset.status} — mock reason, no real Meta call was made`),
+        { permanent: true },
+      );
+    }
+    return {
+      mock: true,
+      provider: 'mock',
+      commentId: `mock-comment-reply-${crypto.randomUUID()}`,
+      repliedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Hide a comment (Phase 4, mock only). Real mode throws
+   * NOT_VERIFIED. Mock mode reports hidden; the network is never
+   * touched. Must only ever be called from the hide_comment approval
+   * executor (src/agents/community.mjs). No comment endpoint,
+   * permission, limit, or quota is ever named, built, or claimed.
+   */
+  hideComment({ asset, comment } = {}) {
+    if (this.mode === 'real') throw notVerifiedError();
+    if (!asset?.id || !comment?.id) {
+      throw new Error('hideComment: asset and comment with ids are required');
+    }
+    if (asset.status !== 'connected') {
+      throw Object.assign(
+        new Error(`Mock hide failed: asset is ${asset.status} — mock reason, no real Meta call was made`),
+        { permanent: true },
+      );
+    }
+    return {
+      mock: true,
+      provider: 'mock',
+      hidden: true,
+      commentId: comment.id,
+      hiddenAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Delete a comment (Phase 4, mock only). Real mode throws
+   * NOT_VERIFIED. Mock mode reports deleted; the network is never
+   * touched. Must only ever be called from the delete_comment
+   * approval executor (src/agents/community.mjs). No comment
+   * endpoint, permission, limit, or quota is ever named, built, or
+   * claimed.
+   */
+  deleteComment({ asset, comment } = {}) {
+    if (this.mode === 'real') throw notVerifiedError();
+    if (!asset?.id || !comment?.id) {
+      throw new Error('deleteComment: asset and comment with ids are required');
+    }
+    if (asset.status !== 'connected') {
+      throw Object.assign(
+        new Error(`Mock delete failed: asset is ${asset.status} — mock reason, no real Meta call was made`),
+        { permanent: true },
+      );
+    }
+    return {
+      mock: true,
+      provider: 'mock',
+      deleted: true,
+      commentId: comment.id,
+      deletedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
    * Health check for one asset row (merged with its token row's status).
    * Mock: {status:'connected'} unless the token is expired/revoked, or the
    * asset itself is disconnected/revoked/error. Never contacts the network.
