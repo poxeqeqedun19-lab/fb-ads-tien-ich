@@ -1,0 +1,229 @@
+// Meta Business OS — Phase 1 (Module A: Connected Assets)
+// Meta connector: MOCK provider + real-mode stub.
+//
+// VERIFIED SURFACE ONLY (Phase 0 re-verification addendum, 2026-11-10):
+//   - Graph API v27.0 exists; Page Feed POST /v27.0/{page-id}/feed and the
+//     Instagram container flow POST /<IG_ID>/media -> /media_publish are
+//     verified, but both are Phase 2 publishing — NOT implemented here.
+//   - Messenger/IG 24h + 7-day windows (Phase 3) and WhatsApp Cloud API
+//     limits (Phase 10) are verified but also NOT implemented here.
+//   - OAuth / App Review / Business Verification (V-19/V-20) remain
+//     NOT_VERIFIED. The real Meta OAuth path is therefore a stub that
+//     throws NOT_VERIFIED. This file NEVER invents a Meta OAuth endpoint,
+//     permission name, or scope. Scopes shown to the user come ONLY from
+//     META_OS_META_SCOPES (constructor `scopes` option); empty by default.
+//
+// Mock mode never contacts the network. Mock tokens are clearly fake
+// ('mock-token-<random>') and mock assets are labelled as mock data
+// everywhere they are surfaced.
+
+export const NOT_VERIFIED_ERROR = {
+  code: 'NOT_VERIFIED',
+  message:
+    'Meta OAuth App Review / Business Verification not yet verified (V-19/V-20); real connection unavailable',
+};
+
+export function notVerifiedError() {
+  const err = new Error(NOT_VERIFIED_ERROR.message);
+  err.code = NOT_VERIFIED_ERROR.code;
+  err.status = 501;
+  return err;
+}
+
+// Fixture assets (mock data only). Parent links mirror the documented shape:
+// page-1 and ad-1 sit under the mock business portfolio; ig-1 sits under page-1.
+// page-2 has no parent (a second, standalone business).
+export const MOCK_FIXTURES = Object.freeze([
+  Object.freeze({
+    type: 'business_portfolio',
+    metaObjectId: 'mock-business-1',
+    name: 'Mock Business Portfolio',
+    parentMetaObjectId: null,
+  }),
+  Object.freeze({
+    type: 'facebook_page',
+    metaObjectId: 'mock-page-1',
+    name: 'Mock Page — BeeSmart Demo',
+    parentMetaObjectId: 'mock-business-1',
+  }),
+  Object.freeze({
+    type: 'facebook_page',
+    metaObjectId: 'mock-page-2',
+    name: 'Mock Page — Second Business',
+    parentMetaObjectId: null,
+  }),
+  Object.freeze({
+    type: 'instagram_account',
+    metaObjectId: 'mock-ig-1',
+    name: 'Mock IG — @beesmart.demo',
+    parentMetaObjectId: 'mock-page-1',
+  }),
+  Object.freeze({
+    type: 'ad_account',
+    metaObjectId: 'mock-ad-1',
+    name: 'Mock Ad Account',
+    parentMetaObjectId: 'mock-business-1',
+  }),
+]);
+
+function randomToken() {
+  // Node 24: global crypto.randomUUID is available. Token value is fake
+  // by construction; only the suffix is random, the shape is deterministic.
+  const suffix =
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID().replace(/-/g, '').slice(0, 24)
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 14)}`;
+  return `mock-token-${suffix}`;
+}
+
+export class MetaConnector {
+  /**
+   * @param {object} opts
+   * @param {'mock'|'real'} [opts.mode='mock'] - 'real' is a stub; it always throws NOT_VERIFIED.
+   * @param {string[]} [opts.scopes=[]] - Scopes from META_OS_META_SCOPES only. Never invented here.
+   * @param {string|null} [opts.appId=null] - META_OS_META_APP_ID placeholder only; never used to build a real URL.
+   */
+  constructor({ mode = 'mock', scopes = [], appId = null } = {}) {
+    if (mode !== 'mock' && mode !== 'real') {
+      throw new Error(`MetaConnector: unknown mode '${mode}' (expected 'mock' or 'real')`);
+    }
+    this.mode = mode;
+    this.scopes = Array.isArray(scopes) ? [...scopes] : [];
+    this.appId = appId || null;
+  }
+
+  get isMock() {
+    return this.mode === 'mock';
+  }
+
+  /**
+   * Build the authorisation URL the user is sent to.
+   * Mock mode returns a same-origin mock authorisation URL labelled MOCK —
+   * never a real facebook.com URL. Real mode throws NOT_VERIFIED.
+   */
+  buildAuthorizeUrl({ redirectUri, state } = {}) {
+    if (this.mode === 'real') throw notVerifiedError();
+    if (!redirectUri || typeof redirectUri !== 'string') {
+      throw new Error('buildAuthorizeUrl: redirectUri is required');
+    }
+    if (!state || typeof state !== 'string') {
+      throw new Error('buildAuthorizeUrl: state is required');
+    }
+    const url = new URL('/mock-meta/authorize', redirectUri);
+    url.searchParams.set('mock', '1');
+    url.searchParams.set('state', state);
+    url.searchParams.set('redirect_uri', redirectUri);
+    return url.toString();
+  }
+
+  /**
+   * Exchange an authorisation code for assets + a token.
+   * Mock mode returns the fixture set and a clearly fake token string and
+   * NEVER contacts the network. Real mode throws NOT_VERIFIED.
+   * @returns {{ assets: Array<{type:string,metaObjectId:string,name:string,parentMetaObjectId:string|null}>, token: string, scopes: string[], expiresAt: string|null }}
+   */
+  exchangeCode(code, { tenantId } = {}) {
+    if (this.mode === 'real') throw notVerifiedError();
+    if (!code || typeof code !== 'string') {
+      throw new Error('exchangeCode: code is required');
+    }
+    if (!tenantId) {
+      throw new Error('exchangeCode: tenantId is required');
+    }
+    return {
+      assets: MOCK_FIXTURES.map((a) => ({ ...a })),
+      token: randomToken(),
+      scopes: [...this.scopes],
+      // Mock tokens "expire" in 60 days so expiry handling is exercisable;
+      // the value is mock-only and is not a Meta fact.
+      expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(),
+    };
+  }
+
+  /** Mock: return the same fixture set for a mock token. Real: NOT_VERIFIED. */
+  listAssetsForToken(token) {
+    if (this.mode === 'real') throw notVerifiedError();
+    if (!token || typeof token !== 'string' || !token.startsWith('mock-token-')) {
+      throw new Error('listAssetsForToken: a mock token is required in mock mode');
+    }
+    return MOCK_FIXTURES.map((a) => ({ ...a }));
+  }
+
+  /**
+   * Refresh a token. Mock: returns the same token value with a new expiry.
+   * Real: NOT_VERIFIED.
+   */
+  refreshToken(asset) {
+    if (this.mode === 'real') throw notVerifiedError();
+    if (!asset || !asset.token) {
+      throw new Error('refreshToken: asset with a token is required');
+    }
+    return {
+      token: asset.token,
+      expiresAt: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(),
+      refreshedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Revoke a token. Mock: reports revoked; the caller deletes the local
+   * token row / marks the asset revoked. Real: NOT_VERIFIED.
+   */
+  revokeToken(asset) {
+    if (this.mode === 'real') throw notVerifiedError();
+    if (!asset || !asset.id) {
+      throw new Error('revokeToken: asset with an id is required');
+    }
+    return { revoked: true, assetId: asset.id, revokedAt: new Date().toISOString() };
+  }
+
+  /**
+   * Health check for one asset row (merged with its token row's status).
+   * Mock: {status:'connected'} unless the token is expired/revoked, or the
+   * asset itself is disconnected/revoked/error. Never contacts the network.
+   * @param {object} asset - connected_assets row, optionally with `tokenStatus`
+   *   ('active'|'expired'|'revoked'|'refresh_failed') merged in.
+   */
+  healthCheck(asset) {
+    if (!asset || !asset.id) {
+      throw new Error('healthCheck: asset with an id is required');
+    }
+    const now = new Date().toISOString();
+    if (asset.status === 'disconnected') {
+      return {
+        status: 'disconnected',
+        lastHealthCheckAt: now,
+        healthMessage:
+          'Disconnected — scheduled posts and inbox access for this asset stop; stored history is retained per retention rules — NOT_VERIFIED.',
+      };
+    }
+    if (asset.status === 'revoked' || asset.tokenStatus === 'revoked') {
+      return {
+        status: 'revoked',
+        lastHealthCheckAt: now,
+        healthMessage: 'Token revoked — reconnect the asset to restore access.',
+      };
+    }
+    if (asset.status === 'token_expired' || asset.tokenStatus === 'expired') {
+      return {
+        status: 'token_expired',
+        lastHealthCheckAt: now,
+        healthMessage: 'Token expired — reconnect the asset to restore access.',
+      };
+    }
+    if (asset.status === 'error' || asset.tokenStatus === 'refresh_failed') {
+      return {
+        status: 'error',
+        lastHealthCheckAt: now,
+        healthMessage: 'Token refresh failed — reconnect the asset to restore access.',
+      };
+    }
+    return {
+      status: 'connected',
+      lastHealthCheckAt: now,
+      healthMessage: 'Mock provider reports the connection as healthy.',
+    };
+  }
+}
+
+export default MetaConnector;

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meta Business OS — Phase 1 (Module A: Connected Assets)</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 960px; margin: 0 auto; padding: 1rem; line-height: 1.45; }
+  .banner { border: 2px solid #8a6d00; background: #fff8d6; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+  .banner strong { display: block; }
+  section { border: 1px solid #ccc; padding: 1rem; margin-bottom: 1rem; }
+  h1 { font-size: 1.4rem; } h2 { font-size: 1.15rem; margin-top: 0; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #ccc; padding: 0.35rem 0.5rem; text-align: left; vertical-align: top; }
+  label { display: block; margin: 0.4rem 0; }
+  input, select, button { font: inherit; padding: 0.3rem 0.5rem; }
+  button { cursor: pointer; margin: 0.15rem 0.25rem 0.15rem 0; }
+  .status-pending_approval { font-weight: bold; }
+  .status-connected { font-weight: bold; }
+  .status-disconnected, .status-token_expired, .status-revoked, .status-error { font-weight: bold; }
+  #message { white-space: pre-wrap; border: 1px solid #999; background: #f6f6f6; padding: 0.5rem; min-height: 2.5rem; }
+  .muted { color: #555; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Meta Business OS — Phase 1 skeleton</h1>
+  <div class="banner" role="note">
+    <strong>Mock Meta provider — no real Meta account connected.</strong>
+    Phase 1 is a skeleton: asset connection (mock), approvals, assignments and
+    audit only. No publishing, inbox, ads, AI or CRM exists yet. Real Meta
+    OAuth is unavailable (App Review / Business Verification not yet verified,
+    V-19/V-20). No Facebook password, cookie, or auth code is ever requested
+    or stored.
+  </div>
+</header>
+
+<main>
+  <section id="signin-section" aria-labelledby="signin-heading">
+    <h2 id="signin-heading">Sign in</h2>
+    <form id="signin-form">
+      <label>Email <input type="email" name="email" required autocomplete="username"></label>
+      <label>Password <input type="password" name="password" required autocomplete="current-password"></label>
+      <button type="submit">Sign in</button>
+    </form>
+    <p class="muted">Sign-in uses the product's own email + password accounts. It is not “Login with Facebook”.</p>
+  </section>
+
+  <section id="app-section" hidden aria-labelledby="app-heading">
+    <h2 id="app-heading">Connected assets</h2>
+    <p>Signed in as <span id="current-user">—</span> <button id="signout-btn" type="button">Sign out</button></p>
+    <p class="banner" role="note"><strong>Mock Meta provider — no real Meta account connected.</strong> Asset names, tokens and statuses below are mock data.</p>
+
+    <h3>Connect</h3>
+    <button id="connect-start-btn" type="button">Connect mock Meta assets</button>
+    <div id="connect-panel" hidden>
+      <p id="connect-warning"></p>
+      <p>Authorisation URL: <code id="connect-url"></code></p>
+      <p>Scopes configured: <code id="connect-scopes"></code></p>
+      <button id="connect-complete-btn" type="button">Continue with mock authorisation</button>
+    </div>
+
+    <h3>Assets</h3>
+    <button id="refresh-assets-btn" type="button">Refresh asset list</button>
+    <table id="assets-table">
+      <thead>
+        <tr><th>Type</th><th>Name</th><th>Owner business</th><th>Status</th><th>Permissions granted</th><th>Date connected</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="assets-body"><tr><td colspan="7">No assets loaded yet.</td></tr></tbody>
+    </table>
+
+    <h3>Approval queue (asset management)</h3>
+    <button id="refresh-approvals-btn" type="button">Refresh approval queue</button>
+    <table id="approvals-table">
+      <thead>
+        <tr><th>Action</th><th>Asset</th><th>Requested by</th><th>Requested at</th><th>Status</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="approvals-body"><tr><td colspan="6">Approval queue not loaded yet.</td></tr></tbody>
+    </table>
+
+    <h3>Audit log</h3>
+    <label>Filter by action <input id="audit-filter" type="text" placeholder="e.g. asset.connected"></label>
+    <button id="refresh-audit-btn" type="button">Load audit log</button>
+    <table id="audit-table">
+      <thead>
+        <tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th><th>Details</th></tr>
+      </thead>
+      <tbody id="audit-body"><tr><td colspan="5">Audit log not loaded yet.</td></tr></tbody>
+    </table>
+  </section>
+
+  <section aria-labelledby="message-heading">
+    <h2 id="message-heading">Result</h2>
+    <div id="message" role="status" aria-live="polite">Not signed in.</div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
