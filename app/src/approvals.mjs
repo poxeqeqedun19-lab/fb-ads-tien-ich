@@ -33,6 +33,54 @@ export function getApprovalById(db, id) {
   return parseRow(db.prepare('SELECT * FROM approvals WHERE id = ?').get(id) ?? null);
 }
 
+/** Pending approvals for one target (optionally filtered by action type), oldest first. */
+export function listPendingApprovalsForTarget(db, { tenantId, targetType, targetId, actionType = null }) {
+  const conditions = ['tenant_id = ?', "status = 'pending'", 'target_type = ?', 'target_id = ?'];
+  const params = [tenantId, targetType, targetId];
+  if (actionType) {
+    conditions.push('action_type = ?');
+    params.push(actionType);
+  }
+  return db
+    .prepare(`SELECT * FROM approvals WHERE ${conditions.join(' AND ')} ORDER BY requested_at ASC`)
+    .all(...params)
+    .map(parseRow);
+}
+
+/**
+ * Cancel an approval that has not executed yet: 'pending', or 'approved'
+ * with no executed_at (an approved-but-unexecuted approval voided because
+ * its target was edited — see Phase 2 AC-2-06). Already-executed,
+ * rejected, expired, or cancelled approvals cannot be cancelled.
+ * Audited as approval.cancelled.
+ */
+export function cancelApproval(db, { approvalId, actorId = null, reason = null }) {
+  const approval = getApprovalById(db, approvalId);
+  if (!approval) throw Object.assign(new Error('Approval not found'), { code: 'not_found' });
+  const cancellable =
+    approval.status === 'pending' || (approval.status === 'approved' && !approval.executed_at);
+  if (!cancellable) {
+    throw Object.assign(new Error(`Approval cannot be cancelled (status: ${approval.status})`), {
+      code: 'approval_not_pending',
+    });
+  }
+  const now = nowIso();
+  db.prepare(`UPDATE approvals SET status = 'cancelled', version = version + 1, updated_at = ? WHERE id = ?`).run(
+    now,
+    approvalId,
+  );
+  appendAudit(db, {
+    tenantId: approval.tenant_id,
+    actorId: actorId ?? null,
+    actorType: actorId ? 'user' : 'system',
+    action: 'approval.cancelled',
+    targetType: 'approval',
+    targetId: approvalId,
+    details: { actionType: approval.action_type, targetType: approval.target_type, targetId: approval.target_id, reason },
+  });
+  return getApprovalById(db, approvalId);
+}
+
 function isExpired(approval, expiryHours) {
   const requestedAt = new Date(approval.requested_at).getTime();
   return Date.now() > requestedAt + expiryHours * 3600 * 1000;

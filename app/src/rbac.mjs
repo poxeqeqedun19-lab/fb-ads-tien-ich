@@ -15,15 +15,27 @@ export const ROLE_PERMISSIONS = Object.freeze({
     'approvals.request',
     'audit.view',
     'orchestrator.view',
+    'drafts.view',
+    'drafts.create',
+    'drafts.edit',
+    'drafts.schedule',
+    'drafts.publish',
+    'ai.draft',
   ]),
   Editor: Object.freeze([
     'assets.view', // assigned assets only (see canAccessAsset)
     'approvals.request',
-    'drafts.create', // Phase 2 placeholder key only
+    'drafts.create',
+    'drafts.view',
+    'drafts.edit',
+    'drafts.schedule',
+    'drafts.publish',
+    'ai.draft',
     'inbox.reply', // Phase 3 placeholder key only
   ]),
   Viewer: Object.freeze([
     'assets.view', // assigned assets only (see canAccessAsset)
+    'drafts.view',
   ]),
 });
 

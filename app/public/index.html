@@ -29,7 +29,9 @@
   <div class="banner" role="note">
     <strong>Mock Meta provider — no real Meta account connected.</strong>
     Phase 1 is a skeleton: asset connection (mock), approvals, assignments and
-    audit only. No publishing, inbox, ads, AI or CRM exists yet. Real Meta
+    audit only. Phase 2 adds Content Studio (mock): drafts, scheduling and
+    mock AI drafting — publishing is mock only and nothing here publishes to
+    a real account. No inbox, ads or CRM exists yet. Real Meta
     OAuth is unavailable (App Review / Business Verification not yet verified,
     V-19/V-20). No Facebook password, cookie, or auth code is ever requested
     or stored.
@@ -69,6 +71,70 @@
       </thead>
       <tbody id="assets-body"><tr><td colspan="7">No assets loaded yet.</td></tr></tbody>
     </table>
+
+    <h2>Content Studio (mock)</h2>
+    <p class="banner" role="note"><strong>Mock Meta provider — no real Meta account connected.</strong> Drafts, scheduling and AI drafting below are mock features: drafts are saved locally and nothing is published to a real account. AI drafts are mock output, not produced by a real AI provider.</p>
+    <p>Tenant timezone: <span id="tenant-timezone">—</span> (scheduled times show both tenant time and UTC ISO).</p>
+
+    <h3>Draft editor</h3>
+    <form id="draft-form">
+      <label>Asset <select id="draft-asset" required></select></label>
+      <label>Title <input id="draft-title" type="text"></label>
+      <label>Body <textarea id="draft-body" rows="4" cols="60"></textarea></label>
+      <label>Post type
+        <select id="draft-type">
+          <option value="feed">feed</option>
+          <option value="reel">reel</option>
+          <option value="story">story</option>
+          <option value="carousel">carousel</option>
+        </select>
+      </label>
+      <label>Scheduled at <input id="draft-scheduled" type="datetime-local"></label>
+      <label>Media references (one per line: URL, optionally “URL | alt text”)
+        <textarea id="draft-media" rows="2" cols="60" placeholder="https://example.com/photo.jpg | A photo"></textarea>
+      </label>
+      <input id="draft-id" type="hidden">
+      <button id="draft-create-btn" type="submit">Create draft</button>
+      <button id="draft-save-btn" type="button">Save edits (PATCH)</button>
+      <button id="draft-edit-approved-btn" type="button">Edit approved / scheduled (re-approval required)</button>
+    </form>
+
+    <h3>AI draft (mock)</h3>
+    <form id="ai-draft-form">
+      <label>Topic <input id="ai-topic" type="text" required></label>
+      <label>Offer <input id="ai-offer" type="text"></label>
+      <label>Tone
+        <select id="ai-tone">
+          <option value="friendly">friendly</option>
+          <option value="professional">professional</option>
+          <option value="playful">playful</option>
+        </select>
+      </label>
+      <label>Call to action <input id="ai-cta" type="text"></label>
+      <button type="submit">AI draft (mock)</button>
+    </form>
+    <p class="muted">AI drafting is mock only: the output is labelled mock and nothing is published.</p>
+
+    <h3>Drafts</h3>
+    <button id="refresh-drafts-btn" type="button">Refresh drafts</button>
+    <table id="drafts-table">
+      <thead>
+        <tr><th>Title</th><th>Status</th><th>Asset</th><th>Type</th><th>Scheduled (tenant time / UTC)</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="drafts-body"><tr><td colspan="6">Drafts not loaded yet.</td></tr></tbody>
+    </table>
+
+    <h3>Scheduled posts</h3>
+    <button id="refresh-scheduled-btn" type="button">Refresh scheduled posts</button>
+    <table id="scheduled-table">
+      <thead>
+        <tr><th>Title</th><th>Status</th><th>Asset</th><th>Type</th><th>Scheduled (tenant time / UTC)</th></tr>
+      </thead>
+      <tbody id="scheduled-body"><tr><td colspan="5">Scheduled posts not loaded yet.</td></tr></tbody>
+    </table>
+
+    <h3>Policy verdict (selected draft)</h3>
+    <div id="policy-panel">No draft selected.</div>
 
     <h3>Approval queue (asset management)</h3>
     <button id="refresh-approvals-btn" type="button">Refresh approval queue</button>

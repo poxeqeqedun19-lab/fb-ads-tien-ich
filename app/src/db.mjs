@@ -164,6 +164,67 @@ CREATE TABLE IF NOT EXISTS orchestrator_tasks (
   updated_at TEXT NOT NULL,
   UNIQUE (tenant_id, task_type, dedup_key)
 );
+CREATE TABLE IF NOT EXISTS posts (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  asset_id TEXT NOT NULL REFERENCES connected_assets(id),
+  author_id TEXT NOT NULL REFERENCES users(id),
+  title TEXT,
+  body_text TEXT NOT NULL DEFAULT '',
+  media_ids TEXT NOT NULL DEFAULT '[]',
+  post_type TEXT NOT NULL DEFAULT 'feed' CHECK (post_type IN ('feed','reel','story','carousel')),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','pending_approval','approved','scheduled','publishing','published','failed','refused')),
+  content_version INTEGER NOT NULL DEFAULT 1,
+  scheduled_at TEXT,
+  published_at TEXT,
+  meta_post_id TEXT,
+  publish_error TEXT,
+  publish_attempts INTEGER NOT NULL DEFAULT 0,
+  ai_generated INTEGER NOT NULL DEFAULT 0,
+  ai_job_id TEXT,
+  deleted_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ai_jobs (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  requested_by TEXT NOT NULL REFERENCES users(id),
+  purpose TEXT NOT NULL CHECK (purpose IN ('caption','reply_draft','ad_copy','comment_reply','summary','other')),
+  context_refs TEXT,
+  provider TEXT NOT NULL DEFAULT 'mock',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','running','succeeded','failed')),
+  error_message TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ai_suggestions (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  ai_job_id TEXT NOT NULL REFERENCES ai_jobs(id),
+  output_text TEXT NOT NULL,
+  review_status TEXT NOT NULL DEFAULT 'pending_review' CHECK (review_status IN ('pending_review','approved','edited_approved','rejected')),
+  reviewed_by TEXT,
+  reviewed_at TEXT,
+  used_in_post_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS post_policy_reviews (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id),
+  post_id TEXT NOT NULL REFERENCES posts(id),
+  checker TEXT NOT NULL DEFAULT 'policy-rules-v1',
+  verdict TEXT NOT NULL CHECK (verdict IN ('pass','pass_with_notes','flag_for_human_review','block')),
+  findings TEXT NOT NULL DEFAULT '[]',
+  notes TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_posts_tenant_asset_status_scheduled ON posts (tenant_id, asset_id, status, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_posts_tenant_meta_post ON posts (tenant_id, meta_post_id);
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_tenant_requested ON ai_jobs (tenant_id, requested_by, created_at);
+CREATE INDEX IF NOT EXISTS idx_ai_suggestions_tenant_job ON ai_suggestions (tenant_id, ai_job_id);
+CREATE INDEX IF NOT EXISTS idx_policy_reviews_tenant_post ON post_policy_reviews (tenant_id, post_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_approvals_tenant_status_requested ON approvals (tenant_id, status, requested_at);
 CREATE INDEX IF NOT EXISTS idx_audit_tenant_created ON audit_log (tenant_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_due ON job_records (status, scheduled_for);

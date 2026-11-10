@@ -36,6 +36,19 @@ try {
   }
 }
 
+// Content routes (Module B, Phase 2) are registered by createApp when
+// the module is present, same pattern as the asset routes above.
+let registerContentRoutes = null;
+try {
+  ({ registerContentRoutes } = await import('./modules/content.mjs'));
+} catch (err) {
+  if (err?.code === 'ERR_MODULE_NOT_FOUND') {
+    console.warn('[meta-business-os] WARNING: src/modules/content.mjs is not present — Content Studio routes unavailable until the content worker delivers it.');
+  } else {
+    throw err;
+  }
+}
+
 // Minimal static serving for app/public/ (Phase 1 skeleton UI): GET /
 // serves index.html. API paths and /health never fall through here.
 const PUBLIC_DIR = resolve(fileURLToPath(new URL('../public/', import.meta.url)));
@@ -363,6 +376,14 @@ export function createApp({ db, config, services = {} }) {
   registerRoute('POST', '/api/approvals/:id/decide', { permission: 'approvals.decide' }, async (ctx) => {
     const { decision, note } = ctx.body ?? {};
     const approval = decideApproval(db, { approvalId: ctx.params.id, decidedBy: ctx.user, decision, note }, { expiryHours: config?.approvalExpiryHours });
+    // Optional module hook (Phase 2: Content Studio moves a post to
+    // approved/scheduled/refused when its publish approval is decided).
+    // A hook failure must never fail the decision itself.
+    try {
+      await services.onApprovalDecided?.(db, approval, { actorId: ctx.user.id, ip: ctx.ip });
+    } catch (err) {
+      console.error('[meta-business-os] onApprovalDecided hook failed:', err?.message);
+    }
     return { status: 200, body: { approval } };
   });
 
@@ -415,6 +436,11 @@ export function createApp({ db, config, services = {} }) {
   // the module is present (last registration wins for identical routes).
   if (typeof registerAssetRoutes === 'function') {
     registerAssetRoutes({ registerRoute });
+  }
+
+  // Content routes (Module B, Phase 2).
+  if (typeof registerContentRoutes === 'function') {
+    registerContentRoutes({ registerRoute });
   }
 
   // ---- Handler -----------------------------------------------------------

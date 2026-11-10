@@ -178,6 +178,59 @@ export class MetaConnector {
   }
 
   /**
+   * Publish a post (Phase 2, mock only). Real mode throws NOT_VERIFIED
+   * (V-19/V-20) like every other real-mode method.
+   *
+   * Mock mode simulates ONLY the two verified publishing surfaces:
+   *   - facebook_page -> Page Feed (POST /v27.0/{page-id}/feed)
+   *   - instagram_account -> container flow (POST /<IG_ID>/media, then
+   *     /media_publish; media types REELS/STORIES/CAROUSEL plus single
+   *     photo/video defaults)
+   * No URL is built and the network is never touched. Returned ids are
+   * mock identifiers. Any error reason is labelled as mock; no
+   * real-looking Meta error code is ever produced.
+   * @param {object} opts
+   * @param {object} opts.asset - connected_assets row.
+   * @param {object} opts.post - posts row.
+   */
+  publishPost({ asset, post } = {}) {
+    if (this.mode === 'real') throw notVerifiedError();
+    if (!asset?.id || !post?.id) {
+      throw new Error('publishPost: asset and post with ids are required');
+    }
+    if (asset.status !== 'connected') {
+      throw Object.assign(
+        new Error(`Mock publish failed: asset is ${asset.status} — mock reason, no real Meta call was made`),
+        { permanent: true },
+      );
+    }
+    if (asset.type !== 'facebook_page' && asset.type !== 'instagram_account') {
+      throw Object.assign(new Error('publishPost: not a publishing surface'), { code: 'validation_error' });
+    }
+    const publishedAt = new Date().toISOString();
+    if (asset.type === 'facebook_page') {
+      return {
+        mock: true,
+        provider: 'mock',
+        surface: 'page_feed',
+        apiVersion: 'v27.0',
+        postId: `mock-post-${crypto.randomUUID()}`,
+        publishedAt,
+      };
+    }
+    return {
+      mock: true,
+      provider: 'mock',
+      surface: 'instagram_container',
+      apiVersion: 'v27.0',
+      containerId: `mock-container-${crypto.randomUUID()}`,
+      postId: `mock-ig-post-${crypto.randomUUID()}`,
+      steps: ['container_created', 'published'],
+      publishedAt,
+    };
+  }
+
+  /**
    * Health check for one asset row (merged with its token row's status).
    * Mock: {status:'connected'} unless the token is expired/revoked, or the
    * asset itself is disconnected/revoked/error. Never contacts the network.
